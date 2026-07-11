@@ -1,0 +1,22 @@
+{
+  "name": "marketing-ops",
+  "version": "0.1.0",
+  "description": "Local, credential-isolated campaign publishing and feedback operations",
+  "author": {
+    "name": "IllegalCreed"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Marketing Ops",
+    "shortDescription": "Run authorized campaigns through a local, fail-closed MCP.",
+    "longDescription": "Marketing Ops validates campaign specs, reports channel health, and performs approved publishing and feedback operations without exposing credentials to Codex.",
+    "developerName": "IllegalCreed",
+    "category": "Productivity",
+    "capabilities": ["Local MCP", "Campaign operations", "Credential isolation"],
+    "defaultPrompt": [
+      "Show the status of my authorized campaign channels.",
+      "Prepare a dry-run campaign for the algorithm visualizer."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

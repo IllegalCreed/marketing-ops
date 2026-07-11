@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "marketing-ops": {
+      "command": "node",
+      "args": ["./dist/server.js"],
+      "cwd": "."
+    }
+  }
+}

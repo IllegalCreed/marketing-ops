@@ -1,0 +1,34 @@
+{
+  "name": "@illegalcreed/marketing-ops",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local credential-isolated MCP for campaign publishing and feedback operations",
+  "packageManager": "pnpm@10.29.2",
+  "bin": {
+    "marketing-ops": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "pnpm clean && tsc -p tsconfig.build.json && xcrun swiftc src/security/keychain-helper.swift -o dist/keychain-helper",
+    "clean": "rm -rf dist coverage",
+    "type-check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:stdio": "node scripts/stdio-smoke.mjs",
+    "test:watch": "vitest",
+    "coverage": "vitest run --coverage",
+    "format": "prettier --write . --ignore-unknown",
+    "format:check": "prettier --check . --ignore-unknown",
+    "verify": "pnpm format:check && pnpm type-check && pnpm test && pnpm build && pnpm test:stdio"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "@vitest/coverage-v8": "^4.1.9",
+    "prettier": "^3.8.4",
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.9"
+  }
+}
