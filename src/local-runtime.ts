@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { GitHubActivationStore } from './activation-store.js';
 import { AdapterError } from './adapters/contract.js';
 import { GitHubCliClient } from './adapters/github-cli.js';
+import { WeiboCliClient } from './adapters/weibo-cli.js';
 import { GitHubChannelController, type PublicGitHubChannelStatus } from './github-channel.js';
 import { assertSafeToolInput, TOOL_INPUT_SCHEMAS } from './contract.js';
 import { MarketingOpsError } from './errors.js';
@@ -11,6 +12,7 @@ import { PublishService, type ReceiptRepository } from './publish-service.js';
 import { ReceiptStore, type PublicPostRef, type PublishReceipt } from './receipt-store.js';
 import { createRuntimeToolHandler } from './runtime-handler.js';
 import { defaultChannelStatuses, type MarketingToolHandler } from './server-factory.js';
+import { WeiboChannelController, type PublicWeiboChannelStatus } from './weibo-channel.js';
 
 export const GITHUB_REPOSITORY = 'IllegalCreed/algorithms-visualization';
 
@@ -29,6 +31,7 @@ interface RuntimeReceiptRepository extends ReceiptRepository {
 
 interface LocalRuntimeOptions {
   github: GitHubRuntimeController;
+  weibo?: { getStatus(): Promise<PublicWeiboChannelStatus> };
   receipts: RuntimeReceiptRepository;
 }
 
@@ -62,14 +65,30 @@ export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): Mar
       if (name === 'channels_status') {
         TOOL_INPUT_SCHEMAS.channels_status.parse(input);
         let github: PublicGitHubChannelStatus;
+        let weibo: PublicWeiboChannelStatus | null = null;
         try {
           github = await options.github.getStatus();
         } catch {
           github = blockedGitHubStatus();
         }
-        const channels = defaultChannelStatuses().map((status) =>
-          status.channel === 'github' ? github : status,
-        );
+        if (options.weibo) {
+          try {
+            weibo = await options.weibo.getStatus();
+          } catch {
+            weibo = {
+              channel: 'weibo',
+              alias: null,
+              health: 'blocked',
+              adapterReady: false,
+              nextAction: 'Run marketing-ops doctor',
+            };
+          }
+        }
+        const channels = defaultChannelStatuses().map((status) => {
+          if (status.channel === 'github') return github;
+          if (status.channel === 'weibo' && weibo) return weibo;
+          return status;
+        });
         return { data: { contractVersion: 2, channels } };
       }
       if (name === 'get_publish_status') {
@@ -193,11 +212,16 @@ export function createDefaultGitHubController(
   });
 }
 
+export function createDefaultWeiboController(): WeiboChannelController {
+  return new WeiboChannelController({ client: new WeiboCliClient() });
+}
+
 export function createDefaultLocalRuntimeToolHandler(
   root: string = marketingOpsDataRoot(),
 ): MarketingToolHandler {
   return createLocalRuntimeToolHandler({
     github: createDefaultGitHubController(root),
+    weibo: createDefaultWeiboController(),
     receipts: new ReceiptStore(root),
   });
 }

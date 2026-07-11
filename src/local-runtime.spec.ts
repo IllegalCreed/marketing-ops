@@ -105,6 +105,15 @@ describe('local runtime lazy GitHub wiring', () => {
     };
     const handler = createLocalRuntimeToolHandler({
       github,
+      weibo: {
+        getStatus: vi.fn(async () => ({
+          channel: 'weibo' as const,
+          alias: null,
+          health: 'not-configured' as const,
+          adapterReady: false as const,
+          nextAction: 'Install official @weibo-ai/weibo-cli',
+        })),
+      },
       receipts: new MemoryReceipts(),
     });
 
@@ -119,6 +128,11 @@ describe('local runtime lazy GitHub wiring', () => {
       alias: 'IllegalCreed',
       health: 'ready',
       adapterReady: false,
+    });
+    expect(data.channels.find((channel) => channel.channel === 'weibo')).toMatchObject({
+      health: 'not-configured',
+      adapterReady: false,
+      nextAction: 'Install official @weibo-ai/weibo-cli',
     });
     await expect(handler('publish_campaign', createPublishRequest())).resolves.toMatchObject({
       isError: true,
@@ -145,6 +159,9 @@ describe('local runtime lazy GitHub wiring', () => {
         createRegistration: vi.fn(async () => null),
         createEnabledClient: vi.fn(async () => null),
       },
+      weibo: {
+        getStatus: vi.fn().mockRejectedValue(new Error('cookie private-cookie')),
+      },
       receipts: new MemoryReceipts(),
     });
     const status = await handler('channels_status', {});
@@ -153,7 +170,29 @@ describe('local runtime lazy GitHub wiring', () => {
       health: 'blocked',
       adapterReady: false,
     });
+    expect(channels.find((channel) => channel.channel === 'weibo')).toMatchObject({
+      health: 'blocked',
+      adapterReady: false,
+      nextAction: 'Run marketing-ops doctor',
+    });
     expect(JSON.stringify(status)).not.toContain('private-token');
+    expect(JSON.stringify(status)).not.toContain('private-cookie');
+
+    const withoutWeibo = createLocalRuntimeToolHandler({
+      github: {
+        getStatus: vi.fn().mockRejectedValue(new Error('offline')),
+        createRegistration: vi.fn(async () => null),
+        createEnabledClient: vi.fn(async () => null),
+      },
+      receipts: new MemoryReceipts(),
+    });
+    await expect(withoutWeibo('channels_status', {})).resolves.toMatchObject({
+      data: {
+        channels: expect.arrayContaining([
+          expect.objectContaining({ channel: 'weibo', health: 'not-configured' }),
+        ]),
+      },
+    });
 
     expect(marketingOpsDataRoot()).toContain('Application Support/marketing-ops');
     expect(createDefaultLocalRuntimeToolHandler('/tmp/marketing-ops-lazy-test')).toBeTypeOf(

@@ -53,6 +53,19 @@ async function savedRoot() {
 }
 
 describe('receipt store filesystem failures', () => {
+  it('TC-AUTO-GHSTORE-127-01 并发等待路径可确定复现', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'marketing-ops-receipt-failure-'));
+    roots.push(root);
+    const ReceiptStore = await loadReceiptStore((actual) => ({
+      link: vi.fn(async (source, destination) => {
+        await actual.link(source, destination);
+        throw Object.assign(new Error('simulated race'), { code: 'EEXIST' });
+      }),
+    }));
+
+    await expect(new ReceiptStore(root).save(receipt())).resolves.toMatchObject({ reused: true });
+  });
+
   it('TC-AUTO-GHSTORE-127-02 非竞争 link 失败被脱敏', async () => {
     const root = await mkdtemp(join(tmpdir(), 'marketing-ops-receipt-failure-'));
     roots.push(root);

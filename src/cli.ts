@@ -12,7 +12,7 @@ import {
   type AutomaticChannel,
 } from './onboarding.js';
 import { MarketingOpsError } from './errors.js';
-import { createDefaultGitHubController } from './local-runtime.js';
+import { createDefaultGitHubController, createDefaultWeiboController } from './local-runtime.js';
 import { MacOsKeychainSecretStore } from './security/secret-store.js';
 
 const KEYCHAIN_HELPER = join(dirname(fileURLToPath(import.meta.url)), 'keychain-helper');
@@ -98,7 +98,9 @@ async function runSetup(channelInput?: AutomaticChannel): Promise<void> {
   }
   if (plan.secretInput === 'official-browser') {
     process.stdout.write(
-      'Official OAuth/device authorization will open here when its T3 adapter lands.\n',
+      channel === 'weibo'
+        ? 'Weibo OAuth remains closed until the Free command catalog can be frozen safely.\n'
+        : 'Official OAuth/device authorization will open here when its T3 adapter lands.\n',
     );
     return;
   }
@@ -116,11 +118,17 @@ async function runSetup(channelInput?: AutomaticChannel): Promise<void> {
 }
 
 async function renderStatuses(): Promise<string> {
-  const github = await createDefaultGitHubController().getStatus();
+  const [github, weibo] = await Promise.all([
+    createDefaultGitHubController().getStatus(),
+    createDefaultWeiboController().getStatus(),
+  ]);
   return CHANNEL_SETUP_CATALOG.map((channel) => {
     if (channel.id === 'github') {
       const readiness = github.adapterReady ? 'enabled' : 'setup-required';
       return `${channel.label.padEnd(14)} ${github.health.padEnd(15)} ${readiness}`;
+    }
+    if (channel.id === 'weibo') {
+      return `${channel.label.padEnd(14)} ${weibo.health.padEnd(15)} ${weibo.nextAction}`;
     }
     return `${channel.label.padEnd(14)} not-configured  Run marketing-ops setup ${channel.id}`;
   }).join('\n');
@@ -133,9 +141,12 @@ async function main() {
   else if (options.command === 'status') process.stdout.write(`${await renderStatuses()}\n`);
   else {
     await access(KEYCHAIN_HELPER);
-    const github = await createDefaultGitHubController().getStatus();
+    const [github, weibo] = await Promise.all([
+      createDefaultGitHubController().getStatus(),
+      createDefaultWeiboController().getStatus(),
+    ]);
     process.stdout.write(
-      `Keychain helper: ready\nPrivate data root: ready\nMCP transport: stdio\nGitHub CLI: ${github.health}\nGitHub adapter: ${github.adapterReady ? 'enabled' : 'disabled'}\n`,
+      `Keychain helper: ready\nPrivate data root: ready\nMCP transport: stdio\nGitHub CLI: ${github.health}\nGitHub adapter: ${github.adapterReady ? 'enabled' : 'disabled'}\nWeibo CLI: ${weibo.health}\nWeibo adapter: disabled\n`,
     );
   }
 }
