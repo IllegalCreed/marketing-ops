@@ -3,6 +3,7 @@ import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/
 import type { z } from 'zod';
 import {
   assertSafeToolInput,
+  CONTRACT_VERSION,
   sanitizeToolOutput,
   SERVER_INSTRUCTIONS,
   TOOL_DEFINITIONS,
@@ -36,7 +37,7 @@ export const failClosedToolHandler: MarketingToolHandler = async (name, input) =
   const parsed = schema.parse(input);
 
   if (name === 'channels_status') {
-    return { data: { contractVersion: 1, channels: defaultStatuses() } };
+    return { data: { contractVersion: CONTRACT_VERSION, channels: defaultStatuses() } };
   }
   if (name === 'get_publish_status') {
     return {
@@ -49,7 +50,7 @@ export const failClosedToolHandler: MarketingToolHandler = async (name, input) =
         campaignId: parsed.campaignId,
         window: parsed.window,
         status: 'unavailable',
-        reason: 'No collectors are enabled in T2',
+        reason: 'No collectors are enabled in T3-A',
       },
     };
   }
@@ -57,7 +58,7 @@ export const failClosedToolHandler: MarketingToolHandler = async (name, input) =
     isError: true,
     data: {
       code: 'ADAPTER_UNAVAILABLE',
-      message: 'Platform adapters are disabled until T3 contract tests pass',
+      message: 'No enabled platform adapter is configured',
     },
   };
 };

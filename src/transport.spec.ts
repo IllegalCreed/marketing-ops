@@ -4,6 +4,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { describe, expect, it } from 'vitest';
 import { TOOL_NAMES } from './contract.js';
 import { createMarketingOpsServer } from './server-factory.js';
+import { createPublishRequest } from './test-fixtures.js';
 
 describe('marketing-ops transport', () => {
   it('TC-AUTO-TRANSPORT-127-01 plugin 只声明本地 STDIO 且不转发 secret env', async () => {
@@ -38,7 +39,7 @@ describe('marketing-ops transport', () => {
 
       const status = await client.callTool({ name: 'channels_status', arguments: {} });
       expect(status.isError).not.toBe(true);
-      expect(status.structuredContent).toMatchObject({ contractVersion: 1 });
+      expect(status.structuredContent).toMatchObject({ contractVersion: 2 });
 
       const authorization = {
         source: 'owner-prompt',
@@ -51,33 +52,7 @@ describe('marketing-ops transport', () => {
       };
       const publish = await client.callTool({
         name: 'publish_campaign',
-        arguments: {
-          campaignId: 'quick-sort-launch',
-          idempotencyKey: 'campaign-v1/quick-sort-launch/abc12345',
-          authorization,
-          spec: {
-            schemaVersion: 1,
-            id: 'quick-sort-launch',
-            topic: 'Quick Sort visualization',
-            targetUrls: ['https://algo.illegalscreed.cn/docs/quick-sort/'],
-            locales: ['en'],
-            channels: ['github'],
-            publishAt: '2026-07-12T20:00:00+09:00',
-            campaign: 'launch-2026q3',
-            content: {
-              variants: {
-                en: {
-                  title: 'Quick Sort visualization',
-                  angle: 'Trace partitioning step by step.',
-                  callToAction: 'Open the visualization',
-                },
-              },
-              media: [],
-            },
-            replies: { mode: 'off', createBugIssues: true },
-            failureMode: 'continue-supported',
-          },
-        },
+        arguments: createPublishRequest(),
       });
       expect(publish).toMatchObject({
         isError: true,

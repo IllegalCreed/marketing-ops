@@ -1,6 +1,6 @@
 {
   "name": "marketing-ops",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.20260711101852",
   "description": "Local, credential-isolated campaign publishing and feedback operations",
   "author": {
     "name": "IllegalCreed"

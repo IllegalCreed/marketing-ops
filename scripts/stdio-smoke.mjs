@@ -28,7 +28,9 @@ try {
     (await client.listTools()).tools.map((tool) => tool.name),
     expectedTools,
   );
-  process.stdout.write('marketing-ops stdio smoke: 7 tools verified\n');
+  const status = await client.callTool({ name: 'channels_status', arguments: {} });
+  assert.equal(status.structuredContent?.contractVersion, 2);
+  process.stdout.write('marketing-ops stdio smoke: contract v2 and 7 tools verified\n');
 } finally {
   await client.close();
 }

@@ -6,8 +6,10 @@ import {
   sanitizeToolOutput,
   SERVER_INSTRUCTIONS,
   TOOL_DEFINITIONS,
+  TOOL_INPUT_SCHEMAS,
   TOOL_NAMES,
 } from './contract.js';
+import { createPublishRequest } from './test-fixtures.js';
 
 const EXPECTED_TOOLS = [
   'channels_status',
@@ -36,7 +38,7 @@ function collectObjectSchemas(value: unknown, result: Record<string, unknown>[] 
 
 describe('marketing-ops MCP contract', () => {
   it('TC-AUTO-MCP-127-01 只公开七个稳定高层工具', () => {
-    expect(CONTRACT_VERSION).toBe(1);
+    expect(CONTRACT_VERSION).toBe(2);
     expect(TOOL_NAMES).toEqual(EXPECTED_TOOLS);
     expect(TOOL_DEFINITIONS.map((tool) => tool.name)).toEqual(EXPECTED_TOOLS);
     expect(SERVER_INSTRUCTIONS.slice(0, 512)).toMatch(/credentials.*never.*returned/i);
@@ -102,5 +104,61 @@ describe('marketing-ops MCP contract', () => {
       trust: 'untrusted',
       canAuthorizeWrites: false,
     });
+  });
+
+  it('TC-AUTO-MCP-127-07 publish_campaign 必须携带 renderer 平台包', () => {
+    const publish = TOOL_DEFINITIONS.find((tool) => tool.name === 'publish_campaign');
+
+    expect(publish?.inputSchema.required).toEqual(expect.arrayContaining(['packages']));
+    expect(() => TOOL_INPUT_SCHEMAS.publish_campaign.parse(createPublishRequest())).not.toThrow();
+    expect(() =>
+      TOOL_INPUT_SCHEMAS.publish_campaign.parse({
+        ...createPublishRequest(),
+        packages: undefined,
+      }),
+    ).toThrow();
+  });
+
+  it('TC-AUTO-MCP-127-08 package 必须唯一、匹配 spec 且只含受控字段', () => {
+    const request = createPublishRequest();
+
+    expect(() =>
+      TOOL_INPUT_SCHEMAS.publish_campaign.parse({
+        ...request,
+        packages: [...request.packages, request.packages[0]],
+      }),
+    ).toThrow(/unique/i);
+    expect(() =>
+      TOOL_INPUT_SCHEMAS.publish_campaign.parse({
+        ...request,
+        packages: [{ ...request.packages[0], channel: 'dev' }],
+      }),
+    ).toThrow(/spec/i);
+    expect(() =>
+      TOOL_INPUT_SCHEMAS.publish_campaign.parse({
+        ...request,
+        packages: [{ ...request.packages[0], selector: '#publish' }],
+      }),
+    ).toThrow();
+    expect(() =>
+      TOOL_INPUT_SCHEMAS.publish_campaign.parse({
+        ...request,
+        spec: {
+          ...request.spec,
+          channels: ['github', 'dev'],
+          failureMode: 'all-or-none',
+        },
+      }),
+    ).toThrow(/every requested channel/i);
+    expect(() =>
+      TOOL_INPUT_SCHEMAS.publish_campaign.parse({
+        ...request,
+        spec: {
+          ...request.spec,
+          channels: 'all-authorized',
+          failureMode: 'all-or-none',
+        },
+      }),
+    ).toThrow(/explicit channel set/i);
   });
 });

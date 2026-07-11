@@ -19,6 +19,18 @@ export default defineConfig({
           functions: 100,
           statements: 100,
         },
+        'src/adapters/**/*.ts': {
+          lines: 90,
+          branches: 85,
+          functions: 100,
+          statements: 90,
+        },
+        'src/publish-service.ts': {
+          lines: 95,
+          branches: 90,
+          functions: 100,
+          statements: 95,
+        },
       },
     },
   },
