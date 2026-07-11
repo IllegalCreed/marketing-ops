@@ -13,6 +13,7 @@
     "clean": "rm -rf dist coverage",
     "type-check": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "test:github-readonly": "node scripts/github-readonly-smoke.mjs",
     "test:stdio": "node scripts/stdio-smoke.mjs",
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",

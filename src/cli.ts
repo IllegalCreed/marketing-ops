@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { access } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline/promises';
@@ -13,6 +12,7 @@ import {
   type AutomaticChannel,
 } from './onboarding.js';
 import { MarketingOpsError } from './errors.js';
+import { createDefaultGitHubController } from './local-runtime.js';
 import { MacOsKeychainSecretStore } from './security/secret-store.js';
 
 const KEYCHAIN_HELPER = join(dirname(fileURLToPath(import.meta.url)), 'keychain-helper');
@@ -90,7 +90,10 @@ async function runSetup(channelInput?: AutomaticChannel): Promise<void> {
   process.stdout.write(`Setting up ${plan.label} with ${plan.method}.\n`);
 
   if (channel === 'github') {
-    process.stdout.write('GitHub will reuse the existing gh CLI authorization during T3.\n');
+    const status = await createDefaultGitHubController().enable();
+    process.stdout.write(
+      `GitHub ${status.alias ?? 'account'} is ready. The adapter is enabled for owner-authorized campaigns.\n`,
+    );
     return;
   }
   if (plan.secretInput === 'official-browser') {
@@ -112,23 +115,27 @@ async function runSetup(channelInput?: AutomaticChannel): Promise<void> {
   );
 }
 
-function renderStatuses(): string {
-  return CHANNEL_SETUP_CATALOG.map(
-    (channel) =>
-      `${channel.label.padEnd(14)} not-configured  Run marketing-ops setup ${channel.id}`,
-  ).join('\n');
+async function renderStatuses(): Promise<string> {
+  const github = await createDefaultGitHubController().getStatus();
+  return CHANNEL_SETUP_CATALOG.map((channel) => {
+    if (channel.id === 'github') {
+      const readiness = github.adapterReady ? 'enabled' : 'setup-required';
+      return `${channel.label.padEnd(14)} ${github.health.padEnd(15)} ${readiness}`;
+    }
+    return `${channel.label.padEnd(14)} not-configured  Run marketing-ops setup ${channel.id}`;
+  }).join('\n');
 }
 
 async function main() {
   const options = parseCliArgs(process.argv.slice(2));
   if (options.command === 'help') process.stdout.write(`${renderCliHelp()}\n`);
   else if (options.command === 'setup') await runSetup(options.channel);
-  else if (options.command === 'status') process.stdout.write(`${renderStatuses()}\n`);
+  else if (options.command === 'status') process.stdout.write(`${await renderStatuses()}\n`);
   else {
     await access(KEYCHAIN_HELPER);
-    const root = join(homedir(), 'Library', 'Application Support', 'marketing-ops');
+    const github = await createDefaultGitHubController().getStatus();
     process.stdout.write(
-      `Keychain helper: ready\nPrivate data root: ${root}\nMCP transport: stdio\n`,
+      `Keychain helper: ready\nPrivate data root: ready\nMCP transport: stdio\nGitHub CLI: ${github.health}\nGitHub adapter: ${github.adapterReady ? 'enabled' : 'disabled'}\n`,
     );
   }
 }

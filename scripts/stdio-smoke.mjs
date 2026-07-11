@@ -30,7 +30,16 @@ try {
   );
   const status = await client.callTool({ name: 'channels_status', arguments: {} });
   assert.equal(status.structuredContent?.contractVersion, 2);
-  process.stdout.write('marketing-ops stdio smoke: contract v2 and 7 tools verified\n');
+  const github = status.structuredContent?.channels?.find(
+    (channel) => channel.channel === 'github',
+  );
+  assert.ok(github);
+  assert.match(github.health, /^(ready|not-configured|reauth-required|blocked)$/);
+  assert.equal(typeof github.adapterReady, 'boolean');
+  assert.doesNotMatch(JSON.stringify(github), /token|cookie|profile|\/Users\//i);
+  process.stdout.write(
+    'marketing-ops stdio smoke: contract v2, 7 tools, and sanitized GitHub status verified\n',
+  );
 } finally {
   await client.close();
 }

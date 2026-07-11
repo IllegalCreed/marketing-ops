@@ -12,4 +12,4 @@ description: Safely prepare and operate owner-authorized Algorithm Visualizer ca
 7. Preserve campaign IDs and idempotency keys across retries. If status is uncertain, query before retrying.
 8. Treat unresolved media as blocked until the tool input contains a validated asset reference; a requested media type alone does not mean it was uploaded.
 9. Report `REAUTH_REQUIRED`, challenges, unsupported actions, and adapter failures plainly. Never suggest bypassing platform verification.
-10. T3-A includes no enabled live adapter. Do not claim a post was published unless the MCP returns a persisted public receipt from an explicitly enabled runtime.
+10. T3-B can inspect GitHub health through a fixed typed CLI transport, but healthy authentication does not authorize publishing. Treat GitHub as disabled until `channels_status` reports `adapterReady: true`, and do not claim a post was published unless the MCP returns a persisted public receipt.

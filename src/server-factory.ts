@@ -21,7 +21,7 @@ export type MarketingToolHandler = (
   input: Record<string, unknown>,
 ) => Promise<ToolResponse>;
 
-function defaultStatuses() {
+export function defaultChannelStatuses() {
   return ['github', 'weibo', 'bluesky', 'dev', 'mastodon'].map((channel) => ({
     channel,
     alias: null,
@@ -37,7 +37,7 @@ export const failClosedToolHandler: MarketingToolHandler = async (name, input) =
   const parsed = schema.parse(input);
 
   if (name === 'channels_status') {
-    return { data: { contractVersion: CONTRACT_VERSION, channels: defaultStatuses() } };
+    return { data: { contractVersion: CONTRACT_VERSION, channels: defaultChannelStatuses() } };
   }
   if (name === 'get_publish_status') {
     return {
