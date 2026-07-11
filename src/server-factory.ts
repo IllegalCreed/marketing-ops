@@ -50,7 +50,7 @@ export const failClosedToolHandler: MarketingToolHandler = async (name, input) =
         campaignId: parsed.campaignId,
         window: parsed.window,
         status: 'unavailable',
-        reason: 'No collectors are enabled in T3-A',
+        reason: 'No enabled collector is available',
       },
     };
   }

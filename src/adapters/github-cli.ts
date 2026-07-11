@@ -16,7 +16,8 @@ const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const TAG_PATTERN = /^marketing\/[a-z0-9][a-z0-9._-]{0,63}$/;
 const RESPONSE_LIMIT_BYTES = 524_288;
 const TIMEOUT_MS = 20_000;
-const API_VERSION = '2022-11-28';
+const API_VERSION = '2026-03-10';
+const PAGE_SCHEMA = z.number().int().min(1).max(10);
 
 const releaseDraftSchema = z
   .object({
@@ -25,6 +26,13 @@ const releaseDraftSchema = z
     body: z.string().min(1).max(200_000),
     draft: z.literal(false),
     prerelease: z.literal(false),
+  })
+  .strict();
+
+const issueDraftSchema = z
+  .object({
+    title: z.string().min(1).max(256),
+    body: z.string().min(1).max(100_000),
   })
   .strict();
 
@@ -58,6 +66,81 @@ const githubCliRequestSchema = z.discriminatedUnion('operation', [
       releaseId: z.number().int().positive().safe(),
     })
     .strict(),
+  z
+    .object({
+      operation: z.literal('get-release'),
+      repository: z.string().regex(REPOSITORY_PATTERN),
+      releaseId: z.number().int().positive().safe(),
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('list-release-reactions'),
+      repository: z.string().regex(REPOSITORY_PATTERN),
+      releaseId: z.number().int().positive().safe(),
+      page: PAGE_SCHEMA,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('traffic-views'),
+      repository: z.string().regex(REPOSITORY_PATTERN),
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('traffic-clones'),
+      repository: z.string().regex(REPOSITORY_PATTERN),
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('traffic-referrers'),
+      repository: z.string().regex(REPOSITORY_PATTERN),
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('traffic-paths'),
+      repository: z.string().regex(REPOSITORY_PATTERN),
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('list-issues'),
+      repository: z.string().regex(REPOSITORY_PATTERN),
+      page: PAGE_SCHEMA,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('create-issue'),
+      repository: z.string().regex(REPOSITORY_PATTERN),
+      issue: issueDraftSchema,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('list-issue-comments'),
+      repository: z.string().regex(REPOSITORY_PATTERN),
+      issueNumber: z.number().int().positive().safe(),
+      page: PAGE_SCHEMA,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('get-tag-reference'),
+      repository: z.string().regex(REPOSITORY_PATTERN),
+      tagName: z.string().regex(TAG_PATTERN),
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('delete-tag-reference'),
+      repository: z.string().regex(REPOSITORY_PATTERN),
+      tagName: z.string().regex(TAG_PATTERN),
+    })
+    .strict(),
 ]);
 
 export type GitHubCliRequest = z.infer<typeof githubCliRequestSchema>;
@@ -89,6 +172,117 @@ const releaseSchema = z
     publishedAt: z.iso.datetime({ offset: true }),
   })
   .strict();
+
+const releaseDetailsSchema = z
+  .object({
+    id: z.number().int().positive().safe(),
+    tagName: z.string().regex(TAG_PATTERN),
+    name: z.string().min(1).max(512),
+    body: z.string().min(1).max(200_000),
+    htmlUrl: z.url().startsWith('https://github.com/'),
+    publishedAt: z.iso.datetime({ offset: true }),
+    assets: z
+      .array(
+        z
+          .object({
+            id: z.number().int().positive().safe(),
+            name: z.string().min(1).max(255),
+            downloadCount: z.number().int().nonnegative().safe(),
+          })
+          .strict(),
+      )
+      .max(1_000),
+  })
+  .strict();
+
+const reactionSchema = z
+  .object({
+    id: z.number().int().positive().safe(),
+    content: z.enum(['+1', 'laugh', 'heart', 'hooray', 'rocket', 'eyes']),
+    userLogin: z.string().min(1).max(39).nullable(),
+    createdAt: z.iso.datetime({ offset: true }),
+  })
+  .strict();
+const reactionsSchema = z.array(reactionSchema).max(100);
+
+const trafficPointSchema = z
+  .object({
+    timestamp: z.iso.datetime({ offset: true }),
+    count: z.number().int().nonnegative().safe(),
+    uniques: z.number().int().nonnegative().safe(),
+  })
+  .strict();
+const trafficSeriesSchema = z
+  .object({
+    count: z.number().int().nonnegative().safe(),
+    uniques: z.number().int().nonnegative().safe(),
+    points: z.array(trafficPointSchema).max(14),
+  })
+  .strict();
+const trafficReferrersSchema = z
+  .array(
+    z
+      .object({
+        referrer: z.string().min(1).max(512),
+        count: z.number().int().nonnegative().safe(),
+        uniques: z.number().int().nonnegative().safe(),
+      })
+      .strict(),
+  )
+  .max(10);
+const trafficPathsSchema = z
+  .array(
+    z
+      .object({
+        path: z.string().startsWith('/').max(2_000),
+        title: z.string().min(1).max(2_000),
+        count: z.number().int().nonnegative().safe(),
+        uniques: z.number().int().nonnegative().safe(),
+      })
+      .strict(),
+  )
+  .max(10);
+
+const issueSchema = z
+  .object({
+    number: z.number().int().positive().safe(),
+    htmlUrl: z.url().startsWith('https://github.com/'),
+    title: z.string().min(1).max(256),
+    body: z.string().max(100_000),
+    state: z.enum(['open', 'closed']),
+    createdAt: z.iso.datetime({ offset: true }),
+    updatedAt: z.iso.datetime({ offset: true }),
+  })
+  .strict();
+const issuesSchema = z.array(issueSchema).max(100);
+const issueCommentSchema = z
+  .object({
+    id: z.number().int().positive().safe(),
+    htmlUrl: z.url().startsWith('https://github.com/'),
+    body: z.string().max(100_000),
+    userLogin: z.string().min(1).max(39).nullable(),
+    createdAt: z.iso.datetime({ offset: true }),
+    updatedAt: z.iso.datetime({ offset: true }),
+  })
+  .strict();
+const issueCommentsSchema = z.array(issueCommentSchema).max(100);
+const tagReferenceSchema = z
+  .object({
+    ref: z.string().startsWith('refs/tags/').max(300),
+    sha: z.string().regex(/^[a-f0-9]{40}$/),
+    type: z.enum(['commit', 'tag']),
+  })
+  .strict();
+
+export type GitHubReleaseDetails = z.infer<typeof releaseDetailsSchema>;
+export type GitHubReleaseReaction = z.infer<typeof reactionSchema>;
+export type GitHubTrafficSeries = z.infer<typeof trafficSeriesSchema>;
+export type GitHubTrafficReferrer = z.infer<typeof trafficReferrersSchema>[number];
+export type GitHubTrafficPath = z.infer<typeof trafficPathsSchema>[number];
+export type GitHubIssueDraft = z.infer<typeof issueDraftSchema>;
+export type GitHubIssueRecord = z.infer<typeof issueSchema>;
+export type GitHubIssueComment = z.infer<typeof issueCommentSchema>;
+export type GitHubTagReference = z.infer<typeof tagReferenceSchema>;
 
 export interface GitHubCliTransport {
   run(request: GitHubCliRequest): Promise<GhProcessResult>;
@@ -124,6 +318,25 @@ const REPOSITORY_PROJECTION =
   '{fullName: .full_name, archived: .archived, disabled: .disabled, permissions: {admin: .permissions.admin, maintain: .permissions.maintain, push: .permissions.push}}';
 const RELEASE_PROJECTION =
   '{id: .id, tagName: .tag_name, name: .name, body: .body, htmlUrl: .html_url, publishedAt: .published_at}';
+const RELEASE_DETAILS_PROJECTION =
+  '{id: .id, tagName: .tag_name, name: .name, body: .body, htmlUrl: .html_url, publishedAt: .published_at, assets: [.assets[] | {id: .id, name: .name, downloadCount: .download_count}]}';
+const REACTIONS_PROJECTION =
+  '[.[] | {id: .id, content: .content, userLogin: .user.login, createdAt: .created_at}]';
+const TRAFFIC_VIEWS_PROJECTION =
+  '{count: .count, uniques: .uniques, points: [.views[] | {timestamp: .timestamp, count: .count, uniques: .uniques}]}';
+const TRAFFIC_CLONES_PROJECTION =
+  '{count: .count, uniques: .uniques, points: [.clones[] | {timestamp: .timestamp, count: .count, uniques: .uniques}]}';
+const TRAFFIC_REFERRERS_PROJECTION =
+  '[.[] | {referrer: .referrer, count: .count, uniques: .uniques}]';
+const TRAFFIC_PATHS_PROJECTION =
+  '[.[] | {path: .path, title: .title, count: .count, uniques: .uniques}]';
+const ISSUES_PROJECTION =
+  '[.[] | select(.pull_request == null) | {number: .number, htmlUrl: .html_url, title: .title, body: (.body // ""), state: .state, createdAt: .created_at, updatedAt: .updated_at}]';
+const ISSUE_PROJECTION =
+  '{number: .number, htmlUrl: .html_url, title: .title, body: (.body // ""), state: .state, createdAt: .created_at, updatedAt: .updated_at}';
+const ISSUE_COMMENTS_PROJECTION =
+  '[.[] | {id: .id, htmlUrl: .html_url, body: (.body // ""), userLogin: .user.login, createdAt: .created_at, updatedAt: .updated_at}]';
+const TAG_REFERENCE_PROJECTION = '{ref: .ref, sha: .object.sha, type: .object.type}';
 
 function baseArgs(endpoint: string, method: 'GET' | 'POST' | 'DELETE'): string[] {
   return [
@@ -188,6 +401,93 @@ export function buildGitHubCliInvocation(value: unknown): GhProcessInvocation {
       RELEASE_PROJECTION,
       body,
     );
+  }
+  if (request.operation === 'get-release') {
+    return projectedInvocation(
+      `repos/${request.repository}/releases/${request.releaseId}`,
+      'GET',
+      RELEASE_DETAILS_PROJECTION,
+    );
+  }
+  if (request.operation === 'list-release-reactions') {
+    return projectedInvocation(
+      `repos/${request.repository}/releases/${request.releaseId}/reactions?per_page=100&page=${request.page}`,
+      'GET',
+      REACTIONS_PROJECTION,
+    );
+  }
+  if (request.operation === 'traffic-views') {
+    return projectedInvocation(
+      `repos/${request.repository}/traffic/views?per=day`,
+      'GET',
+      TRAFFIC_VIEWS_PROJECTION,
+    );
+  }
+  if (request.operation === 'traffic-clones') {
+    return projectedInvocation(
+      `repos/${request.repository}/traffic/clones?per=day`,
+      'GET',
+      TRAFFIC_CLONES_PROJECTION,
+    );
+  }
+  if (request.operation === 'traffic-referrers') {
+    return projectedInvocation(
+      `repos/${request.repository}/traffic/popular/referrers`,
+      'GET',
+      TRAFFIC_REFERRERS_PROJECTION,
+    );
+  }
+  if (request.operation === 'traffic-paths') {
+    return projectedInvocation(
+      `repos/${request.repository}/traffic/popular/paths`,
+      'GET',
+      TRAFFIC_PATHS_PROJECTION,
+    );
+  }
+  if (request.operation === 'list-issues') {
+    return projectedInvocation(
+      `repos/${request.repository}/issues?state=all&sort=created&direction=desc&per_page=100&page=${request.page}`,
+      'GET',
+      ISSUES_PROJECTION,
+    );
+  }
+  if (request.operation === 'create-issue') {
+    return projectedInvocation(
+      `repos/${request.repository}/issues`,
+      'POST',
+      ISSUE_PROJECTION,
+      JSON.stringify(request.issue),
+    );
+  }
+  if (request.operation === 'list-issue-comments') {
+    return projectedInvocation(
+      `repos/${request.repository}/issues/${request.issueNumber}/comments?per_page=100&page=${request.page}`,
+      'GET',
+      ISSUE_COMMENTS_PROJECTION,
+    );
+  }
+  if (request.operation === 'get-tag-reference') {
+    return projectedInvocation(
+      `repos/${request.repository}/git/ref/tags/${request.tagName}`,
+      'GET',
+      TAG_REFERENCE_PROJECTION,
+    );
+  }
+  if (request.operation === 'delete-tag-reference') {
+    return {
+      args: [
+        ...baseArgs(`repos/${request.repository}/git/refs/tags/${request.tagName}`, 'DELETE'),
+        '--silent',
+      ],
+      stdin: null,
+      timeoutMs: TIMEOUT_MS,
+      maxOutputBytes: RESPONSE_LIMIT_BYTES,
+    };
+  }
+  if (request.operation !== 'delete-release') {
+    throw new AdapterError('INVALID_CONTENT', 'Unsupported GitHub CLI operation', {
+      retryable: false,
+    });
   }
   return {
     args: [
@@ -351,6 +651,123 @@ export class GitHubCliClient implements GitHubReleaseClient {
     if (result.exitCode !== 0 && httpStatus(result) === 404) return 'not-found';
     requireSuccess(result, 'after-submit');
     return 'deleted';
+  }
+
+  async getRelease(repository: string, releaseId: number): Promise<GitHubReleaseDetails> {
+    const request = githubCliRequestSchema.parse({
+      operation: 'get-release',
+      repository,
+      releaseId,
+    });
+    const result = await this.#transport.run(request);
+    return parseResponse(
+      releaseDetailsSchema,
+      requireSuccess(result, 'before-submit'),
+      'before-submit',
+    );
+  }
+
+  async listReleaseReactions(
+    repository: string,
+    releaseId: number,
+    page: number,
+  ): Promise<GitHubReleaseReaction[]> {
+    const request = githubCliRequestSchema.parse({
+      operation: 'list-release-reactions',
+      repository,
+      releaseId,
+      page,
+    });
+    const result = await this.#transport.run(request);
+    return parseResponse(reactionsSchema, requireSuccess(result, 'before-submit'), 'before-submit');
+  }
+
+  async getTrafficViews(repository: string): Promise<GitHubTrafficSeries> {
+    return this.#readRepositoryObservation('traffic-views', repository, trafficSeriesSchema);
+  }
+
+  async getTrafficClones(repository: string): Promise<GitHubTrafficSeries> {
+    return this.#readRepositoryObservation('traffic-clones', repository, trafficSeriesSchema);
+  }
+
+  async getTrafficReferrers(repository: string): Promise<GitHubTrafficReferrer[]> {
+    return this.#readRepositoryObservation('traffic-referrers', repository, trafficReferrersSchema);
+  }
+
+  async getTrafficPaths(repository: string): Promise<GitHubTrafficPath[]> {
+    return this.#readRepositoryObservation('traffic-paths', repository, trafficPathsSchema);
+  }
+
+  async listIssues(repository: string, page: number): Promise<GitHubIssueRecord[]> {
+    const request = githubCliRequestSchema.parse({
+      operation: 'list-issues',
+      repository,
+      page,
+    });
+    const result = await this.#transport.run(request);
+    return parseResponse(issuesSchema, requireSuccess(result, 'before-submit'), 'before-submit');
+  }
+
+  async createIssue(repository: string, issue: GitHubIssueDraft): Promise<GitHubIssueRecord> {
+    const request = githubCliRequestSchema.parse({ operation: 'create-issue', repository, issue });
+    const result = await this.#transport.run(request);
+    return parseResponse(issueSchema, requireSuccess(result, 'after-submit'), 'after-submit');
+  }
+
+  async listIssueComments(
+    repository: string,
+    issueNumber: number,
+    page: number,
+  ): Promise<GitHubIssueComment[]> {
+    const request = githubCliRequestSchema.parse({
+      operation: 'list-issue-comments',
+      repository,
+      issueNumber,
+      page,
+    });
+    const result = await this.#transport.run(request);
+    return parseResponse(
+      issueCommentsSchema,
+      requireSuccess(result, 'before-submit'),
+      'before-submit',
+    );
+  }
+
+  async findTagReference(repository: string, tagName: string): Promise<GitHubTagReference | null> {
+    const request = githubCliRequestSchema.parse({
+      operation: 'get-tag-reference',
+      repository,
+      tagName,
+    });
+    const result = await this.#transport.run(request);
+    if (result.exitCode !== 0 && httpStatus(result) === 404) return null;
+    return parseResponse(
+      tagReferenceSchema,
+      requireSuccess(result, 'before-submit'),
+      'before-submit',
+    );
+  }
+
+  async deleteTagReference(repository: string, tagName: string): Promise<'deleted' | 'not-found'> {
+    const request = githubCliRequestSchema.parse({
+      operation: 'delete-tag-reference',
+      repository,
+      tagName,
+    });
+    const result = await this.#transport.run(request);
+    if (result.exitCode !== 0 && httpStatus(result) === 404) return 'not-found';
+    requireSuccess(result, 'after-submit');
+    return 'deleted';
+  }
+
+  async #readRepositoryObservation<T>(
+    operation: 'traffic-views' | 'traffic-clones' | 'traffic-referrers' | 'traffic-paths',
+    repository: string,
+    schema: z.ZodType<T>,
+  ): Promise<T> {
+    const request = githubCliRequestSchema.parse({ operation, repository });
+    const result = await this.#transport.run(request);
+    return parseResponse(schema, requireSuccess(result, 'before-submit'), 'before-submit');
   }
 
   async checkHealth(repository: string): Promise<GitHubCliHealth> {

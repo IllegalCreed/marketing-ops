@@ -20,6 +20,37 @@ class MemoryReceipts implements ReceiptRepository {
     this.values.set(receipt.idempotencyKey, receipt);
     return { receipt, reused: false };
   }
+
+  async listByCampaign(campaignId: string) {
+    return [...this.values.values()].filter((receipt) => receipt.campaignId === campaignId);
+  }
+
+  async findKnownPostRef(postRef: { channel: string; postId: string; publicUrl: string }) {
+    return (
+      [...this.values.values()].find(
+        (receipt) =>
+          receipt.channel === postRef.channel &&
+          receipt.postId === postRef.postId &&
+          receipt.publicUrl === postRef.publicUrl,
+      ) ?? null
+    );
+  }
+
+  async findByPostRef(
+    campaignId: string,
+    postRef: { channel: string; postId: string; publicUrl: string },
+  ) {
+    const receipt = await this.findKnownPostRef(postRef);
+    return receipt?.campaignId === campaignId ? receipt : null;
+  }
+
+  async markDeleted(key: string) {
+    const receipt = this.values.get(key);
+    if (!receipt) throw new Error('not found');
+    const deleted = { ...receipt, status: 'deleted' as const };
+    this.values.set(key, deleted);
+    return deleted;
+  }
 }
 
 function adapter() {
@@ -70,6 +101,7 @@ describe('local runtime lazy GitHub wiring', () => {
         nextAction: 'Run marketing-ops setup github',
       })),
       createRegistration: vi.fn(async (): Promise<AdapterRegistration | null> => null),
+      createEnabledClient: vi.fn(async () => null),
     };
     const handler = createLocalRuntimeToolHandler({
       github,
@@ -111,6 +143,7 @@ describe('local runtime lazy GitHub wiring', () => {
       github: {
         getStatus: vi.fn().mockRejectedValue(new Error('Bearer private-token')),
         createRegistration: vi.fn(async () => null),
+        createEnabledClient: vi.fn(async () => null),
       },
       receipts: new MemoryReceipts(),
     });

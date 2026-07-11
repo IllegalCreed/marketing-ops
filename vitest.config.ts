@@ -49,6 +49,18 @@ export default defineConfig({
           functions: 100,
           statements: 100,
         },
+        'src/github-observability.ts': {
+          lines: 95,
+          branches: 90,
+          functions: 100,
+          statements: 95,
+        },
+        'src/receipt-store.ts': {
+          lines: 95,
+          branches: 90,
+          functions: 100,
+          statements: 95,
+        },
         'src/runtime/gh-process.ts': {
           lines: 95,
           branches: 80,

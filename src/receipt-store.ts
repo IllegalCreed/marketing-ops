@@ -1,5 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { chmod, link, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
+import {
+  chmod,
+  link,
+  lstat,
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { MarketingOpsError } from './errors.js';
 
@@ -34,6 +45,12 @@ export interface PublishReceipt {
   status: 'queued' | 'published' | 'failed' | 'deleted';
 }
 
+export interface PublicPostRef {
+  channel: PublishReceipt['channel'];
+  postId: string;
+  publicUrl: string;
+}
+
 const RECEIPT_KEYS = [
   'schemaVersion',
   'campaignId',
@@ -46,6 +63,7 @@ const RECEIPT_KEYS = [
   'adapterVersion',
   'status',
 ] as const;
+const MAX_RECEIPT_BYTES = 65_536;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -118,24 +136,32 @@ export class ReceiptStore {
       mode: 0o600,
       flag: 'wx',
     });
+    let created = true;
     try {
       await link(temporary, path);
       await chmod(path, 0o600);
     } catch (error) {
-      if (!isRecord(error) || error.code !== 'EEXIST') throw error;
+      if (!isRecord(error) || error.code !== 'EEXIST') {
+        throw new MarketingOpsError('STORAGE_CORRUPTED', 'Receipt storage is corrupted');
+      }
+      created = false;
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const metadata = await lstat(path);
+        if (metadata.nlink === 1) break;
+        await new Promise<void>((resolveSettled) => setImmediate(resolveSettled));
+      }
     } finally {
       await unlink(temporary).catch(() => undefined);
     }
     const stored = await this.getByIdempotencyKey(receipt.idempotencyKey);
     if (!stored) throw new MarketingOpsError('STORAGE_CORRUPTED', 'Receipt write was not durable');
-    return { receipt: stored, reused: stored.postId !== receipt.postId };
+    return { receipt: stored, reused: !created };
   }
 
   async getByIdempotencyKey(idempotencyKey: string): Promise<PublishReceipt | null> {
     await this.#ensureDirectory();
     try {
-      const raw = await readFile(this.#pathFor(idempotencyKey), 'utf8');
-      return parseReceipt(JSON.parse(raw) as unknown);
+      return await this.#readStoredReceipt(this.#pathFor(idempotencyKey));
     } catch (error) {
       if (isMissing(error)) return null;
       if (error instanceof MarketingOpsError) throw error;
@@ -143,9 +169,115 @@ export class ReceiptStore {
     }
   }
 
+  async listByCampaign(campaignId: string): Promise<PublishReceipt[]> {
+    return (await this.#allReceipts()).filter((receipt) => receipt.campaignId === campaignId);
+  }
+
+  async findKnownPostRef(postRef: PublicPostRef): Promise<PublishReceipt | null> {
+    return this.#uniquePostRefMatch(await this.#allReceipts(), postRef);
+  }
+
+  async findByPostRef(campaignId: string, postRef: PublicPostRef): Promise<PublishReceipt | null> {
+    return this.#uniquePostRefMatch(await this.listByCampaign(campaignId), postRef);
+  }
+
+  async markDeleted(idempotencyKey: string): Promise<PublishReceipt> {
+    const existing = await this.getByIdempotencyKey(idempotencyKey);
+    if (!existing) throw new MarketingOpsError('INVALID_INPUT', 'Known receipt was not found');
+    if (existing.status === 'deleted') return existing;
+    const receipt = parseReceipt({ ...existing, status: 'deleted' });
+    const temporary = join(this.#directory, `.${randomUUID()}.tmp`);
+    await writeFile(temporary, `${JSON.stringify(receipt, null, 2)}\n`, {
+      encoding: 'utf8',
+      mode: 0o600,
+      flag: 'wx',
+    });
+    try {
+      await rename(temporary, this.#pathFor(idempotencyKey));
+      await chmod(this.#pathFor(idempotencyKey), 0o600);
+    } finally {
+      await unlink(temporary).catch(() => undefined);
+    }
+    const stored = await this.getByIdempotencyKey(idempotencyKey);
+    if (!stored || stored.status !== 'deleted') {
+      throw new MarketingOpsError('STORAGE_CORRUPTED', 'Receipt update was not durable');
+    }
+    return stored;
+  }
+
+  async #allReceipts(): Promise<PublishReceipt[]> {
+    await this.#ensureDirectory();
+    let entries: Dirent[];
+    try {
+      entries = await readdir(this.#directory, { withFileTypes: true });
+    } catch {
+      throw new MarketingOpsError('STORAGE_CORRUPTED', 'Receipt storage is corrupted');
+    }
+    const receiptEntries = entries.filter((entry) => entry.name.endsWith('.json'));
+    if (receiptEntries.length > 10_000 || receiptEntries.some((entry) => !entry.isFile())) {
+      throw new MarketingOpsError('STORAGE_CORRUPTED', 'Receipt storage is corrupted');
+    }
+    const receipts: PublishReceipt[] = [];
+    for (const entry of receiptEntries) {
+      try {
+        receipts.push(await this.#readStoredReceipt(join(this.#directory, entry.name)));
+      } catch (error) {
+        if (error instanceof MarketingOpsError) throw error;
+        throw new MarketingOpsError('STORAGE_CORRUPTED', 'Receipt storage is corrupted');
+      }
+    }
+    const references = new Set<string>();
+    for (const receipt of receipts) {
+      const reference = `${receipt.channel}\0${receipt.postId}\0${receipt.publicUrl}`;
+      if (references.has(reference)) {
+        throw new MarketingOpsError('STORAGE_CORRUPTED', 'Receipt references are duplicated');
+      }
+      references.add(reference);
+    }
+    return receipts.sort(
+      (left, right) =>
+        left.publishedAt.localeCompare(right.publishedAt) ||
+        left.channel.localeCompare(right.channel),
+    );
+  }
+
+  #uniquePostRefMatch(receipts: PublishReceipt[], postRef: PublicPostRef): PublishReceipt | null {
+    const matches = receipts.filter(
+      (receipt) =>
+        receipt.channel === postRef.channel &&
+        receipt.postId === postRef.postId &&
+        receipt.publicUrl === postRef.publicUrl,
+    );
+    return matches[0] ?? null;
+  }
+
   async #ensureDirectory(): Promise<void> {
-    await mkdir(this.#directory, { recursive: true, mode: 0o700 });
-    await chmod(this.#directory, 0o700);
+    try {
+      await mkdir(this.#directory, { recursive: true, mode: 0o700 });
+      await chmod(this.#directory, 0o700);
+    } catch {
+      throw new MarketingOpsError('STORAGE_CORRUPTED', 'Receipt storage is corrupted');
+    }
+  }
+
+  async #readStoredReceipt(path: string): Promise<PublishReceipt> {
+    const metadata = await lstat(path);
+    if (
+      !metadata.isFile() ||
+      metadata.nlink !== 1 ||
+      (metadata.mode & 0o077) !== 0 ||
+      metadata.size > MAX_RECEIPT_BYTES
+    ) {
+      throw new MarketingOpsError(
+        'STORAGE_CORRUPTED',
+        'Receipt file is not a private regular file',
+      );
+    }
+    const raw = await readFile(path, 'utf8');
+    if (Buffer.byteLength(raw) > MAX_RECEIPT_BYTES) {
+      throw new MarketingOpsError('STORAGE_CORRUPTED', 'Receipt file exceeds its safety limit');
+    }
+    return parseReceipt(JSON.parse(raw) as unknown);
   }
 
   #pathFor(idempotencyKey: string): string {

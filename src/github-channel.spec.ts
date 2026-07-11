@@ -35,6 +35,15 @@ function client(health: 'ready' | 'not-configured' | 'reauth-required' | 'blocke
     findReleaseByTag: vi.fn(),
     createRelease: vi.fn(),
     deleteRelease: vi.fn(),
+    findTagReference: vi.fn(),
+    deleteTagReference: vi.fn(),
+    getRelease: vi.fn(),
+    listReleaseReactions: vi.fn(),
+    getTrafficViews: vi.fn(),
+    getTrafficClones: vi.fn(),
+    getTrafficReferrers: vi.fn(),
+    getTrafficPaths: vi.fn(),
+    listIssueComments: vi.fn(),
   };
 }
 
@@ -66,8 +75,9 @@ describe('GitHub activation and channel controller', () => {
       REPOSITORY,
       () => '2026-07-11T10:00:00.000Z',
     );
+    const gh = client();
     const controller = new GitHubChannelController({
-      client: client(),
+      client: gh,
       activations: store,
       repository: REPOSITORY,
     });
@@ -93,6 +103,7 @@ describe('GitHub activation and channel controller', () => {
       health: 'ready',
       adapter: { definition: { channel: 'github' } },
     });
+    await expect(controller.createEnabledClient()).resolves.toBe(gh);
 
     const unhealthyAfterEnable = new GitHubChannelController({
       client: client('blocked'),
@@ -104,6 +115,7 @@ describe('GitHub activation and channel controller', () => {
       adapterReady: false,
     });
     await expect(unhealthyAfterEnable.createRegistration()).resolves.toBeNull();
+    await expect(unhealthyAfterEnable.createEnabledClient()).resolves.toBeNull();
 
     const blocked = new GitHubChannelController({
       client: client('reauth-required'),

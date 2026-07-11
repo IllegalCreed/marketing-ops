@@ -122,6 +122,13 @@ describe('typed GitHub CLI client', () => {
       }),
       result({ stdout: releaseJson() }),
       result({ stdout: releaseJson() }),
+      result({
+        stdout: JSON.stringify({
+          ref: 'refs/tags/marketing/quick-sort-launch',
+          sha: 'a'.repeat(40),
+          type: 'commit',
+        }),
+      }),
     );
     const client = new GitHubCliClient(mock);
 
@@ -136,6 +143,13 @@ describe('typed GitHub CLI client', () => {
     await expect(
       client.createRelease(REPOSITORY, buildGitHubReleaseDraft(createAdapterPublishInput())),
     ).resolves.toMatchObject({ id: 123 });
+    await expect(
+      client.findTagReference(REPOSITORY, 'marketing/quick-sort-launch'),
+    ).resolves.toEqual({
+      ref: 'refs/tags/marketing/quick-sort-launch',
+      sha: 'a'.repeat(40),
+      type: 'commit',
+    });
 
     const malformed = new GitHubCliClient(
       transport(result({ stdout: '{"login":"IllegalCreed","token":"private"}' })),
@@ -150,6 +164,9 @@ describe('typed GitHub CLI client', () => {
       result({ exitCode: 1, stderr: 'gh: Not Found (HTTP 404)' }),
       result({ exitCode: 1, stderr: 'gh: Not Found (HTTP 404)' }),
       result(),
+      result({ exitCode: 1, stderr: 'gh: Not Found (HTTP 404)' }),
+      result({ exitCode: 1, stderr: 'gh: Not Found (HTTP 404)' }),
+      result(),
     );
     const client = new GitHubCliClient(mock);
 
@@ -158,6 +175,15 @@ describe('typed GitHub CLI client', () => {
     ).resolves.toBeNull();
     await expect(client.deleteRelease(REPOSITORY, 123)).resolves.toBe('not-found');
     await expect(client.deleteRelease(REPOSITORY, 123)).resolves.toBe('deleted');
+    await expect(
+      client.findTagReference(REPOSITORY, 'marketing/quick-sort-launch'),
+    ).resolves.toBeNull();
+    await expect(
+      client.deleteTagReference(REPOSITORY, 'marketing/quick-sort-launch'),
+    ).resolves.toBe('not-found');
+    await expect(
+      client.deleteTagReference(REPOSITORY, 'marketing/quick-sort-launch'),
+    ).resolves.toBe('deleted');
   });
 
   it('TC-AUTO-GHCLI-127-05 错误保留类别但不泄漏 stderr', async () => {

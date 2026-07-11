@@ -2,6 +2,7 @@ import type { GitHubActivationStore } from './activation-store.js';
 import type { GitHubCliClient, GitHubCliHealth } from './adapters/github-cli.js';
 import { GitHubReleaseAdapter, type GitHubReleaseClient } from './adapters/github-release.js';
 import { MarketingOpsError } from './errors.js';
+import type { GitHubObservabilityClient } from './github-observability.js';
 import type { AdapterRegistration } from './publish-service.js';
 
 export interface PublicGitHubChannelStatus {
@@ -12,7 +13,9 @@ export interface PublicGitHubChannelStatus {
   nextAction: string | null;
 }
 
-type GitHubChannelClient = GitHubReleaseClient & Pick<GitHubCliClient, 'checkHealth'>;
+type GitHubChannelClient = GitHubReleaseClient &
+  GitHubObservabilityClient &
+  Pick<GitHubCliClient, 'checkHealth'>;
 
 interface GitHubChannelControllerOptions {
   client: GitHubChannelClient;
@@ -73,17 +76,25 @@ export class GitHubChannelController {
   }
 
   async createRegistration(): Promise<AdapterRegistration | null> {
-    try {
-      if (!(await this.#activations.get())) return null;
-    } catch {
-      return null;
-    }
-    const health = await this.#client.checkHealth(this.#repository);
-    if (health.health !== 'ready') return null;
+    if (!(await this.#isEnabledAndHealthy())) return null;
     return {
       adapter: new GitHubReleaseAdapter({ client: this.#client, repository: this.#repository }),
       enabled: true,
       health: 'ready',
     };
+  }
+
+  async createEnabledClient(): Promise<GitHubObservabilityClient | null> {
+    return (await this.#isEnabledAndHealthy()) ? this.#client : null;
+  }
+
+  async #isEnabledAndHealthy(): Promise<boolean> {
+    try {
+      if (!(await this.#activations.get())) return false;
+    } catch {
+      return false;
+    }
+    const health = await this.#client.checkHealth(this.#repository);
+    return health.health === 'ready';
   }
 }

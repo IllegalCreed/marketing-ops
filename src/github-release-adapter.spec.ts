@@ -27,7 +27,11 @@ function createClient(record: GitHubReleaseRecord | null = null) {
       .fn<GitHubReleaseClient['createRelease']>()
       .mockImplementation(async (_repository, input) => createRecord(input.body)),
     deleteRelease: vi.fn<GitHubReleaseClient['deleteRelease']>().mockResolvedValue('deleted'),
-  } satisfies GitHubReleaseClient;
+    findTagReference: vi.fn(
+      async () => null as { ref: string; sha: string; type: 'commit' | 'tag' } | null,
+    ),
+    deleteTagReference: vi.fn(async () => 'deleted' as 'deleted' | 'not-found'),
+  };
 }
 
 function createAdapter(client: GitHubReleaseClient) {
@@ -95,7 +99,7 @@ describe('GitHub Release adapter with typed fake client', () => {
       receipt: {
         channel: 'github',
         postId: '123',
-        adapterVersion: 'github-release@1.0.0',
+        adapterVersion: 'github-release@1.2.0',
         status: 'published',
       },
     });
@@ -105,6 +109,20 @@ describe('GitHub Release adapter with typed fake client', () => {
     );
     expect(client.createRelease.mock.calls[0]?.[1]).not.toHaveProperty('command');
     expect(client.createRelease.mock.calls[0]?.[1]).not.toHaveProperty('args');
+  });
+
+  it('TC-AUTO-GHSMOKE-127-01 不复用无法证明归属的既有 tag', async () => {
+    const client = createClient();
+    client.findTagReference.mockResolvedValueOnce({
+      ref: 'refs/tags/marketing/quick-sort-launch',
+      sha: 'a'.repeat(40),
+      type: 'commit',
+    });
+
+    await expect(createAdapter(client).publish(createAdapterPublishInput())).rejects.toMatchObject({
+      code: 'IDEMPOTENCY_CONFLICT',
+    });
+    expect(client.createRelease).not.toHaveBeenCalled();
   });
 
   it('TC-AUTO-GITHUB-127-04 认证与提交后未知结果沿共享错误合同映射', async () => {
@@ -159,14 +177,21 @@ describe('GitHub Release adapter with typed fake client', () => {
     const client = createClient();
     const adapter = createAdapter(client);
     const receipt = (await adapter.publish(createAdapterPublishInput())).receipt;
+    const remote = createRecord(buildGitHubReleaseDraft(createAdapterPublishInput()).body);
+    client.findReleaseByTag.mockResolvedValueOnce(remote).mockResolvedValueOnce(null);
 
     await expect(adapter.delete(receipt)).resolves.toEqual({ status: 'deleted' });
-    client.deleteRelease.mockResolvedValueOnce('not-found');
+    client.deleteTagReference.mockResolvedValueOnce('not-found');
     await expect(adapter.delete(receipt)).resolves.toEqual({ status: 'already-deleted' });
     expect(client.deleteRelease).toHaveBeenNthCalledWith(
       1,
       'IllegalCreed/algorithms-visualization',
       123,
+    );
+    expect(client.deleteTagReference).toHaveBeenNthCalledWith(
+      1,
+      'IllegalCreed/algorithms-visualization',
+      'marketing/quick-sort-launch',
     );
 
     await expect(adapter.delete({ ...receipt, postId: 'not-a-number' })).rejects.toMatchObject({
@@ -175,24 +200,43 @@ describe('GitHub Release adapter with typed fake client', () => {
     client.deleteRelease.mockRejectedValueOnce(
       new AdapterTransportError('forbidden', { status: 403, stage: 'before-submit' }),
     );
+    client.findReleaseByTag.mockResolvedValueOnce(remote);
     await expect(adapter.delete(receipt)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
   });
 
-  it('TC-AUTO-GITHUB-127-07 Issue、traffic 与 feedback 未接线时能力显式关闭', () => {
+  it('TC-AUTO-GITHUB-127-06 删除前对拍 marker，tag 清理失败时保留可重试状态', async () => {
+    const client = createClient();
+    const adapter = createAdapter(client);
+    const receipt = (await adapter.publish(createAdapterPublishInput())).receipt;
+    client.findReleaseByTag.mockResolvedValueOnce(createRecord('Different marker'));
+    await expect(adapter.delete(receipt)).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+    expect(client.deleteRelease).not.toHaveBeenCalled();
+    expect(client.deleteTagReference).not.toHaveBeenCalled();
+
+    client.findReleaseByTag.mockResolvedValueOnce(null);
+    client.deleteTagReference.mockRejectedValueOnce(
+      new AdapterTransportError('temporary failure', { status: 503, stage: 'after-submit' }),
+    );
+    await expect(adapter.delete(receipt)).rejects.toMatchObject({
+      code: 'UNKNOWN_RESULT',
+      lookupRequired: true,
+    });
+  });
+
+  it('TC-AUTO-GITHUB-127-07 / GHISSUE-127-06 collector 可读但自动回复保持关闭', () => {
     const definition = createAdapter(createClient()).definition;
 
     expect(definition.capabilities).toMatchObject({
       publish: true,
       status: true,
-      metrics: false,
-      feedback: false,
+      metrics: true,
+      feedback: true,
       reply: false,
       delete: true,
     });
-    expect(() => requireAdapterCapability(definition, 'metrics')).toThrowError(
-      expect.objectContaining({ code: 'UNSUPPORTED_OPERATION' }),
-    );
-    expect(() => requireAdapterCapability(definition, 'feedback')).toThrowError(
+    expect(() => requireAdapterCapability(definition, 'metrics')).not.toThrow();
+    expect(() => requireAdapterCapability(definition, 'feedback')).not.toThrow();
+    expect(() => requireAdapterCapability(definition, 'reply')).toThrowError(
       expect.objectContaining({ code: 'UNSUPPORTED_OPERATION' }),
     );
   });

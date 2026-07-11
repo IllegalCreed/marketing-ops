@@ -29,28 +29,40 @@ export interface GitHubReleaseRecord {
   publishedAt: string;
 }
 
+export interface GitHubTagReference {
+  ref: string;
+  sha: string;
+  type: 'commit' | 'tag';
+}
+
 export interface GitHubReleaseClient {
   findReleaseByTag(repository: string, tagName: string): Promise<GitHubReleaseRecord | null>;
   createRelease(repository: string, input: GitHubReleaseDraft): Promise<GitHubReleaseRecord>;
   deleteRelease(repository: string, releaseId: number): Promise<'deleted' | 'not-found'>;
+  findTagReference(repository: string, tagName: string): Promise<GitHubTagReference | null>;
+  deleteTagReference(repository: string, tagName: string): Promise<'deleted' | 'not-found'>;
 }
 
 const DEFINITION = defineAdapter({
   channel: 'github',
-  version: 'github-release@1.0.0',
+  version: 'github-release@1.2.0',
   capabilities: {
     publish: true,
     status: true,
-    metrics: false,
-    feedback: false,
+    metrics: true,
+    feedback: true,
     reply: false,
     delete: true,
   },
 });
 
+function markerForValues(contentHash: string, idempotencyKey: string): string {
+  const idempotencyHash = createHash('sha256').update(idempotencyKey).digest('hex');
+  return `<!-- marketing-ops:v1 content-sha256=${contentHash} idempotency-sha256=${idempotencyHash} -->`;
+}
+
 function markerFor(input: AdapterPublishInput): string {
-  const idempotencyHash = createHash('sha256').update(input.idempotencyKey).digest('hex');
-  return `<!-- marketing-ops:v1 content-sha256=${input.contentHash} idempotency-sha256=${idempotencyHash} -->`;
+  return markerForValues(input.contentHash, input.idempotencyKey);
 }
 
 function heading(locale: 'zh-CN' | 'en'): string {
@@ -134,6 +146,20 @@ export class GitHubReleaseAdapter implements ChannelAdapter {
       return { receipt: this.#toReceipt(input, existing), reused: true };
     }
 
+    let existingTag: GitHubTagReference | null;
+    try {
+      existingTag = await this.#client.findTagReference(this.#repository, release.tagName);
+    } catch (error) {
+      throw mapAdapterTransportError(error);
+    }
+    if (existingTag) {
+      throw new AdapterError(
+        'IDEMPOTENCY_CONFLICT',
+        'The campaign tag exists without an owned Release marker',
+        { retryable: false },
+      );
+    }
+
     try {
       const created = await this.#client.createRelease(this.#repository, release);
       if (created.tagName !== release.tagName || !created.body.includes(markerFor(input))) {
@@ -152,11 +178,13 @@ export class GitHubReleaseAdapter implements ChannelAdapter {
   async delete(receipt: PublishReceipt): Promise<{ status: 'deleted' | 'already-deleted' }> {
     requireAdapterCapability(this.definition, 'delete');
     const releaseId = Number(receipt.postId);
+    const tagName = `marketing/${receipt.campaignId}`;
     const expectedPrefix = `https://github.com/${this.#repository}/releases/`;
     if (
       receipt.channel !== 'github' ||
       !Number.isSafeInteger(releaseId) ||
       releaseId <= 0 ||
+      !/^marketing\/[a-z0-9][a-z0-9._-]{0,63}$/.test(tagName) ||
       !receipt.publicUrl.startsWith(expectedPrefix)
     ) {
       throw new AdapterError(
@@ -168,8 +196,27 @@ export class GitHubReleaseAdapter implements ChannelAdapter {
       );
     }
     try {
-      const result = await this.#client.deleteRelease(this.#repository, releaseId);
-      return { status: result === 'deleted' ? 'deleted' : 'already-deleted' };
+      const release = await this.#client.findReleaseByTag(this.#repository, tagName);
+      if (
+        release &&
+        (release.id !== releaseId ||
+          release.htmlUrl !== receipt.publicUrl ||
+          !release.body.includes(markerForValues(receipt.contentHash, receipt.idempotencyKey)))
+      ) {
+        throw new AdapterError(
+          'IDEMPOTENCY_CONFLICT',
+          'The campaign tag no longer matches the known Release receipt',
+          { retryable: false },
+        );
+      }
+      const releaseResult = release
+        ? await this.#client.deleteRelease(this.#repository, releaseId)
+        : 'not-found';
+      const tagResult = await this.#client.deleteTagReference(this.#repository, tagName);
+      return {
+        status:
+          releaseResult === 'deleted' || tagResult === 'deleted' ? 'deleted' : 'already-deleted',
+      };
     } catch (error) {
       throw mapAdapterTransportError(error);
     }
