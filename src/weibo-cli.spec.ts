@@ -131,6 +131,23 @@ describe('Weibo official CLI typed read-only client', () => {
           result(
             doctor({
               ready: false,
+              steps: { login: true, developerVerification: false, subscription: false },
+              subscription: null,
+            }),
+          ),
+        ),
+      ).checkHealth(),
+    ).resolves.toMatchObject({
+      health: 'blocked',
+      reason: 'DEVELOPER_VERIFICATION_REQUIRED',
+      gates: { login: true, developerVerification: false, freePlan: false },
+    });
+    await expect(
+      new WeiboCliClient(
+        transport(
+          result(
+            doctor({
+              ready: false,
               steps: { login: true, developerVerification: true, subscription: false },
             }),
           ),

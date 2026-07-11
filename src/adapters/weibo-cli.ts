@@ -42,6 +42,7 @@ const doctorSchema = z
         plan: z.object({ name: z.string().trim().min(1).max(100) }).passthrough(),
       })
       .passthrough()
+      .nullable()
       .optional(),
   })
   .passthrough();
