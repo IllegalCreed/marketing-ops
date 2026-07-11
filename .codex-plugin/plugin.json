@@ -12,11 +12,7 @@
     "longDescription": "Marketing Ops validates campaign specs, reports channel health, and performs approved publishing and feedback operations without exposing credentials to Codex.",
     "developerName": "IllegalCreed",
     "category": "Productivity",
-    "capabilities": [
-      "Local MCP",
-      "Campaign operations",
-      "Credential isolation"
-    ],
+    "capabilities": ["Local MCP", "Campaign operations", "Credential isolation"],
     "defaultPrompt": [
       "Show the status of my authorized campaign channels.",
       "Prepare a dry-run campaign for the algorithm visualizer."
