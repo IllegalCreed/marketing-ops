@@ -22,6 +22,7 @@ function sdk() {
       data: { feed: [] },
     }),
     post: vi.fn<BlueskySdkClient['post']>().mockResolvedValue({ uri: URI, cid: 'bafy-post' }),
+    deletePost: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -168,6 +169,22 @@ describe('Bluesky official SDK client boundary', () => {
     );
   });
 
+  it('TC-AUTO-BSKYAPI-127-04C 删除只接受当前账号 DID 的合法帖子 URI', async () => {
+    const { client: api, fake } = client();
+
+    await expect(api.deleteTextPost(URI)).resolves.toEqual({ status: 'deleted' });
+    expect(fake.deletePost).toHaveBeenCalledWith(URI);
+
+    await expect(
+      api.deleteTextPost('at://did:plc:zyxwvutsrqponmlkjihgfedc/app.bsky.feed.post/3ltx4abcde22a'),
+    ).rejects.toMatchObject({ status: 403, stage: 'before-submit' });
+    await expect(api.deleteTextPost('not-an-at-uri')).rejects.toMatchObject({
+      status: 403,
+      stage: 'before-submit',
+    });
+    expect(fake.deletePost).toHaveBeenCalledOnce();
+  });
+
   it('TC-AUTO-BSKYAPI-127-05 认证、限流、服务异常与畸形响应失败关闭', async () => {
     for (const status of [401, 403, 429, 503]) {
       const fake = sdk();
@@ -200,6 +217,13 @@ describe('Bluesky official SDK client boundary', () => {
     await expect(
       client(malformedPost).client.createTextPost({ text: 'text', langs: ['en'] }),
     ).rejects.toMatchObject({ stage: 'after-submit' });
+
+    const failedDelete = sdk();
+    failedDelete.deletePost.mockRejectedValueOnce({ status: 401, message: APP_PASSWORD });
+    await expect(client(failedDelete).client.deleteTextPost(URI)).rejects.toMatchObject({
+      status: 401,
+      stage: 'after-submit',
+    });
   });
 
   it('TC-AUTO-BSKYAPI-127-06 SDK 错误只映射状态与 bounded retry，不回传原始正文', async () => {

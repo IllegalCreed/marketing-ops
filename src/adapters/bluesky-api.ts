@@ -26,6 +26,7 @@ export interface BlueskySdkClient {
     langs: ['en'];
     createdAt: string;
   }): Promise<unknown>;
+  deletePost(postUri: string): Promise<void>;
 }
 
 export type BlueskySdkFactory = () => BlueskySdkClient;
@@ -281,6 +282,23 @@ export class BlueskyApiClient {
       publicUrl: publicUrl(parsed.data.uri),
       publishedAt: createdAt,
     };
+  }
+
+  async deleteTextPost(uri: string): Promise<{ status: 'deleted' }> {
+    const identity = await this.#identityForOperation('before-submit');
+    const match = atUriPattern.exec(uri);
+    if (!match || match[1] !== identity.did) {
+      throw new AdapterTransportError('Bluesky post ownership did not match', {
+        status: 403,
+        stage: 'before-submit',
+      });
+    }
+    try {
+      await this.#sdk.deletePost(uri);
+      return { status: 'deleted' };
+    } catch (error) {
+      throw transportError(error, 'after-submit');
+    }
   }
 
   async #authenticate(): Promise<BlueskyIdentity> {

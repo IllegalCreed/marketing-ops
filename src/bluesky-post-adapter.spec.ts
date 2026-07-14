@@ -6,6 +6,7 @@ import {
   type BlueskyPostRecord,
   type BlueskyTextClient,
 } from './adapters/bluesky-post.js';
+import type { PublishReceipt } from './receipt-store.js';
 
 const TARGET_URL =
   'https://algo.illegalscreed.cn/en/docs/quick-sort/?utm_source=bluesky&utm_medium=social&utm_campaign=launch';
@@ -50,6 +51,22 @@ function record(text = postBody()): BlueskyPostRecord {
   };
 }
 
+function publishedReceipt(): PublishReceipt {
+  const value = record();
+  return {
+    schemaVersion: 1,
+    campaignId: 'quick-sort-launch',
+    channel: 'bluesky',
+    postId: value.uri,
+    publicUrl: value.publicUrl,
+    publishedAt: value.publishedAt,
+    contentHash: 'b'.repeat(64),
+    idempotencyKey: 'campaign-v2/quick-sort-launch/bluesky-1234',
+    adapterVersion: 'bluesky-text@0.2.0',
+    status: 'published',
+  };
+}
+
 function client(existing: BlueskyPostRecord | null = null) {
   return {
     findRecentPostByText: vi
@@ -58,6 +75,7 @@ function client(existing: BlueskyPostRecord | null = null) {
     createTextPost: vi
       .fn<BlueskyTextClient['createTextPost']>()
       .mockImplementation(async (draft) => record(draft.text)),
+    deleteTextPost: vi.fn().mockResolvedValue({ status: 'deleted' as const }),
   };
 }
 
@@ -127,7 +145,7 @@ describe('Bluesky text adapter with typed fake client', () => {
         channel: 'bluesky',
         postId: record().uri,
         publicUrl: record().publicUrl,
-        adapterVersion: 'bluesky-text@0.1.0',
+        adapterVersion: 'bluesky-text@0.2.0',
         status: 'published',
       },
     });
@@ -228,14 +246,54 @@ describe('Bluesky text adapter with typed fake client', () => {
       metrics: false,
       feedback: false,
       reply: false,
-      delete: false,
+      delete: true,
     });
-    for (const operation of ['status', 'metrics', 'feedback', 'reply', 'delete'] as const) {
+    for (const operation of ['status', 'metrics', 'feedback', 'reply'] as const) {
       expect(() => requireAdapterCapability(adapter.definition, operation)).toThrowError(
         expect.objectContaining({ code: 'UNSUPPORTED_OPERATION' }),
       );
     }
     expect(fake.findRecentPostByText).not.toHaveBeenCalled();
     expect(fake.createTextPost).not.toHaveBeenCalled();
+  });
+
+  it('TC-AUTO-BSKYADAPTER-127-06 删除只接受本 adapter 的精确已发布 receipt', async () => {
+    const fake = client();
+    const adapter = new BlueskyTextAdapter({ client: fake });
+    const receipt = publishedReceipt();
+
+    await expect(adapter.delete?.(receipt)).resolves.toEqual({ status: 'deleted' });
+    expect(fake.deleteTextPost).toHaveBeenCalledWith(receipt.postId);
+
+    for (const invalid of [
+      { ...receipt, channel: 'github' as const },
+      { ...receipt, adapterVersion: 'bluesky-text@0.1.0' },
+      { ...receipt, status: 'deleted' as const },
+      { ...receipt, postId: 'not-an-at-uri' },
+      { ...receipt, publicUrl: 'https://bsky.app/profile/did:plc:other/post/other' },
+    ]) {
+      await expect(adapter.delete?.(invalid)).rejects.toMatchObject({
+        code: 'INVALID_CONTENT',
+      });
+    }
+    expect(fake.deleteTextPost).toHaveBeenCalledOnce();
+  });
+
+  it('TC-AUTO-BSKYADAPTER-127-07 删除 transport 与未知结果保持失败关闭', async () => {
+    const fake = client();
+    const adapter = new BlueskyTextAdapter({ client: fake });
+
+    fake.deleteTextPost.mockRejectedValueOnce(
+      new AdapterTransportError('private response', { status: 401, stage: 'after-submit' }),
+    );
+    await expect(adapter.delete(publishedReceipt())).rejects.toMatchObject({
+      code: 'REAUTH_REQUIRED',
+    });
+
+    fake.deleteTextPost.mockResolvedValueOnce({ status: 'unknown' } as never);
+    await expect(adapter.delete(publishedReceipt())).rejects.toMatchObject({
+      code: 'UNKNOWN_RESULT',
+      lookupRequired: true,
+    });
   });
 });

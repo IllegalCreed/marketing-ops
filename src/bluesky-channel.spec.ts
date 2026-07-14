@@ -62,6 +62,7 @@ function client(
     })),
     findRecentPostByText: vi.fn(async () => ({ complete: true, post: null })),
     createTextPost: vi.fn(),
+    deleteTextPost: vi.fn(async () => ({ status: 'deleted' as const })),
   };
 }
 
@@ -119,7 +120,7 @@ describe('Bluesky channel controller', () => {
     await expect(controller.createRegistration()).resolves.toMatchObject({
       enabled: true,
       health: 'ready',
-      adapter: { definition: { channel: 'bluesky', version: 'bluesky-text@0.1.0' } },
+      adapter: { definition: { channel: 'bluesky', version: 'bluesky-text@0.2.0' } },
     });
   });
 

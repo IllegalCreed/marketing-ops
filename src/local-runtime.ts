@@ -192,12 +192,25 @@ export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): Mar
         if (receipt.status === 'deleted') {
           return { data: { campaignId: request.campaignId, status: 'already-deleted' } };
         }
-        if (receipt.channel !== 'github') return unavailableOperation();
         if (receipt.status !== 'published') {
           throw new MarketingOpsError('INVALID_INPUT', 'Known post is not published');
         }
-        const registration = await options.github.createRegistration();
-        if (!registration?.adapter.delete) return unavailableOperation();
+        const registration =
+          receipt.channel === 'github'
+            ? await options.github.createRegistration()
+            : receipt.channel === 'bluesky' && options.bluesky
+              ? await options.bluesky.createRegistration()
+              : null;
+        if (
+          !registration ||
+          !registration.enabled ||
+          registration.health !== 'ready' ||
+          registration.adapter.definition.channel !== receipt.channel ||
+          !registration.adapter.definition.capabilities.delete ||
+          !registration.adapter.delete
+        ) {
+          return unavailableOperation();
+        }
         const result = await registration.adapter.delete(receipt);
         await options.receipts.markDeleted(receipt.idempotencyKey);
         return { data: { campaignId: request.campaignId, status: result.status } };

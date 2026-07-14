@@ -101,7 +101,7 @@ function blueskyAdapter() {
         metrics: false,
         feedback: false,
         reply: false,
-        delete: false,
+        delete: true,
       },
     },
     expectedFormat: 'post',
@@ -121,6 +121,7 @@ function blueskyAdapter() {
         status: 'published' as const,
       },
     })),
+    delete: vi.fn(async () => ({ status: 'deleted' as const })),
   };
   return value;
 }
@@ -248,6 +249,51 @@ describe('local runtime lazy GitHub wiring', () => {
     });
     expect(bluesky.createRegistration).toHaveBeenCalledOnce();
     expect(github.createRegistration).toHaveBeenCalledOnce();
+  });
+
+  it('TC-AUTO-BSKYRUNTIME-127-02 Bluesky 删除只走已知 receipt 与动态 registration', async () => {
+    const adapter = blueskyAdapter();
+    const receipts = new MemoryReceipts();
+    const bluesky = {
+      getStatus: vi.fn(),
+      createRegistration: vi.fn(async (): Promise<AdapterRegistration> => ({
+        adapter,
+        enabled: true,
+        health: 'ready',
+      })),
+    };
+    const handler = createLocalRuntimeToolHandler({
+      github: {
+        getStatus: vi.fn(),
+        createRegistration: vi.fn(async () => null),
+        createEnabledClient: vi.fn(async () => null),
+      },
+      bluesky,
+      receipts,
+    });
+    const published = await handler('publish_campaign', createBlueskyPublishRequest());
+    const receipt = (published.data as { receipts: PublishReceipt[] }).receipts[0]!;
+
+    await expect(
+      handler('delete_post', {
+        campaignId: receipt.campaignId,
+        postRef: {
+          channel: receipt.channel,
+          postId: receipt.postId,
+          publicUrl: receipt.publicUrl,
+        },
+        idempotencyKey: 'delete/quick-sort-launch/bluesky-0001',
+        authorization: {
+          source: 'owner-prompt',
+          authorizedAt: '2026-07-14T12:00:00.000Z',
+        },
+      }),
+    ).resolves.toMatchObject({ data: { status: 'deleted' } });
+    expect(adapter.delete).toHaveBeenCalledWith(receipt);
+    expect((await receipts.listByCampaign(receipt.campaignId))[0]).toMatchObject({
+      status: 'deleted',
+    });
+    expect(bluesky.createRegistration).toHaveBeenCalledTimes(2);
   });
 
   it('TC-AUTO-RUNTIME-127-01 status 异常与默认工厂保持惰性失败关闭', async () => {

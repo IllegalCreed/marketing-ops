@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { PublishReceipt } from '../receipt-store.js';
 import {
   AdapterError,
   createPublishedReceipt,
@@ -32,23 +33,24 @@ export interface BlueskyPostLookup {
 export interface BlueskyTextClient {
   findRecentPostByText(text: string): Promise<BlueskyPostLookup>;
   createTextPost(draft: BlueskyTextDraft): Promise<BlueskyPostRecord>;
+  deleteTextPost(uri: string): Promise<{ status: 'deleted' }>;
 }
 
 const DEFINITION = defineAdapter({
   channel: 'bluesky',
-  version: 'bluesky-text@0.1.0',
+  version: 'bluesky-text@0.2.0',
   capabilities: {
     publish: true,
     status: false,
     metrics: false,
     feedback: false,
     reply: false,
-    delete: false,
+    delete: true,
   },
 });
 
 const atUriPattern =
-  /^at:\/\/did:[a-z0-9]+:[A-Za-z0-9._:%-]+\/app\.bsky\.feed\.post\/[A-Za-z0-9._~:-]+$/;
+  /^at:\/\/(did:[a-z0-9]+:[A-Za-z0-9._:%-]+)\/app\.bsky\.feed\.post\/([A-Za-z0-9._~:-]+)$/;
 const recordSchema = z
   .object({
     uri: z.string().regex(atUriPattern),
@@ -60,6 +62,32 @@ const recordSchema = z
     publishedAt: z.iso.datetime({ offset: true }),
   })
   .strict();
+const deleteReceiptSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    channel: z.literal('bluesky'),
+    postId: z.string().regex(atUriPattern),
+    publicUrl: z.url(),
+    adapterVersion: z.literal(DEFINITION.version),
+    status: z.literal('published'),
+  })
+  .passthrough();
+const deleteResultSchema = z.object({ status: z.literal('deleted') }).strict();
+
+function publicUrlFromUri(uri: string): string {
+  const match = atUriPattern.exec(uri)!;
+  return `https://bsky.app/profile/${match[1]}/post/${match[2]}`;
+}
+
+function parseDeleteReceipt(value: PublishReceipt): string {
+  const parsed = deleteReceiptSchema.safeParse(value);
+  if (!parsed.success || parsed.data.publicUrl !== publicUrlFromUri(parsed.data.postId)) {
+    throw new AdapterError('INVALID_CONTENT', 'Bluesky delete receipt is invalid', {
+      retryable: false,
+    });
+  }
+  return parsed.data.postId;
+}
 
 function parseInput(value: unknown): AdapterPublishInput {
   const input = parseAdapterPublishInput(value, {
@@ -190,5 +218,25 @@ export class BlueskyTextAdapter implements ChannelAdapter {
         publishedAt: created.publishedAt,
       }),
     };
+  }
+
+  async delete(receipt: PublishReceipt): Promise<{ status: 'deleted' }> {
+    requireAdapterCapability(this.definition, 'delete');
+    const uri = parseDeleteReceipt(receipt);
+    let result: { status: 'deleted' };
+    try {
+      result = await this.#client.deleteTextPost(uri);
+    } catch (error) {
+      throw mapAdapterTransportError(error);
+    }
+    const parsed = deleteResultSchema.safeParse(result);
+    if (!parsed.success) {
+      throw new AdapterError('UNKNOWN_RESULT', 'Bluesky delete result is invalid', {
+        retryable: false,
+        stage: 'after-submit',
+        lookupRequired: true,
+      });
+    }
+    return parsed.data;
   }
 }
