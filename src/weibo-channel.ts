@@ -23,7 +23,7 @@ function nextAction(health: WeiboCliHealth): string {
     return 'Use the Weibo Free plan; paid plans are disabled';
   }
   if (health.reason === 'READY') {
-    return 'Run marketing-ops setup weibo to freeze the Free publish command';
+    return 'Weibo Free is read-only; keep publishing disabled';
   }
   return 'Run marketing-ops doctor';
 }

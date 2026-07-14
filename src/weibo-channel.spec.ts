@@ -22,7 +22,7 @@ describe('Weibo channel fail-closed runtime status', () => {
       alias: '可视化算法',
       health: 'ready',
       adapterReady: false,
-      nextAction: 'Run marketing-ops setup weibo to freeze the Free publish command',
+      nextAction: 'Weibo Free is read-only; keep publishing disabled',
     });
   });
 
