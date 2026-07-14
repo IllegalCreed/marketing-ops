@@ -1,13 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ChannelAdapter } from './adapters/contract.js';
 import {
+  createDefaultBlueskyClient,
   createDefaultLocalRuntimeToolHandler,
   createLocalRuntimeToolHandler,
   marketingOpsDataRoot,
 } from './local-runtime.js';
 import type { AdapterRegistration, ReceiptRepository } from './publish-service.js';
 import type { PublishReceipt } from './receipt-store.js';
-import { createPublishRequest } from './test-fixtures.js';
+import { createBlueskyPublishRequest, createPublishRequest } from './test-fixtures.js';
 
 class MemoryReceipts implements ReceiptRepository {
   readonly values = new Map<string, PublishReceipt>();
@@ -89,6 +90,41 @@ function adapter() {
   return value;
 }
 
+function blueskyAdapter() {
+  const value: ChannelAdapter = {
+    definition: {
+      channel: 'bluesky',
+      version: 'bluesky-test@1.0.0',
+      capabilities: {
+        publish: true,
+        status: false,
+        metrics: false,
+        feedback: false,
+        reply: false,
+        delete: false,
+      },
+    },
+    expectedFormat: 'post',
+    preflight: vi.fn(async () => undefined),
+    publish: vi.fn<ChannelAdapter['publish']>(async (input) => ({
+      reused: false,
+      receipt: {
+        schemaVersion: 1 as const,
+        campaignId: input.campaignId,
+        channel: 'bluesky' as const,
+        postId: 'at://did:plc:abcdefghijklmnopqrstuvwx/app.bsky.feed.post/3ltx4abcde22a',
+        publicUrl: 'https://bsky.app/profile/did:plc:abcdefghijklmnopqrstuvwx/post/3ltx4abcde22a',
+        publishedAt: '2026-07-14T10:00:00.000Z',
+        contentHash: input.contentHash,
+        idempotencyKey: input.idempotencyKey,
+        adapterVersion: 'bluesky-test@1.0.0',
+        status: 'published' as const,
+      },
+    })),
+  };
+  return value;
+}
+
 describe('local runtime lazy GitHub wiring', () => {
   it('TC-AUTO-RUNTIME-127-01 status 动态但 publish 仅在 activation+health ready 时注入', async () => {
     const githubAdapter = adapter();
@@ -114,6 +150,16 @@ describe('local runtime lazy GitHub wiring', () => {
           nextAction: 'Install official @weibo-ai/weibo-cli',
         })),
       },
+      bluesky: {
+        getStatus: vi.fn(async () => ({
+          channel: 'bluesky' as const,
+          alias: 'algorithms-visualization.bsky.social',
+          health: 'ready' as const,
+          adapterReady: false,
+          nextAction: 'Run marketing-ops setup bluesky',
+        })),
+        createRegistration: vi.fn(async () => null),
+      },
       receipts: new MemoryReceipts(),
     });
 
@@ -134,6 +180,11 @@ describe('local runtime lazy GitHub wiring', () => {
       adapterReady: false,
       nextAction: 'Install official @weibo-ai/weibo-cli',
     });
+    expect(data.channels.find((channel) => channel.channel === 'bluesky')).toMatchObject({
+      alias: 'algorithms-visualization.bsky.social',
+      health: 'ready',
+      adapterReady: false,
+    });
     await expect(handler('publish_campaign', createPublishRequest())).resolves.toMatchObject({
       isError: true,
       data: { receipts: [], failures: [{ code: 'ADAPTER_UNAVAILABLE' }] },
@@ -152,6 +203,53 @@ describe('local runtime lazy GitHub wiring', () => {
     expect(githubAdapter.publish).toHaveBeenCalledOnce();
   });
 
+  it('TC-AUTO-BSKYRUNTIME-127-01 只为请求中的 Bluesky 惰性注册 adapter', async () => {
+    const adapter = blueskyAdapter();
+    const github = {
+      getStatus: vi.fn(),
+      createRegistration: vi.fn(async () => null),
+      createEnabledClient: vi.fn(async () => null),
+    };
+    const bluesky = {
+      getStatus: vi.fn(async () => ({
+        channel: 'bluesky' as const,
+        alias: 'algorithms-visualization.bsky.social',
+        health: 'ready' as const,
+        adapterReady: true,
+        nextAction: null,
+      })),
+      createRegistration: vi.fn(async (): Promise<AdapterRegistration> => ({
+        adapter,
+        enabled: true,
+        health: 'ready',
+      })),
+    };
+    const handler = createLocalRuntimeToolHandler({
+      github,
+      bluesky,
+      receipts: new MemoryReceipts(),
+    });
+
+    await expect(handler('publish_campaign', createBlueskyPublishRequest())).resolves.toMatchObject(
+      {
+        data: {
+          receipts: [{ channel: 'bluesky', postId: expect.stringMatching(/^at:\/\//) }],
+          failures: [],
+        },
+      },
+    );
+    expect(bluesky.createRegistration).toHaveBeenCalledOnce();
+    expect(github.createRegistration).not.toHaveBeenCalled();
+    expect(adapter.publish).toHaveBeenCalledOnce();
+
+    await expect(handler('publish_campaign', createPublishRequest())).resolves.toMatchObject({
+      isError: true,
+      data: { failures: [{ channel: 'github', code: 'ADAPTER_UNAVAILABLE' }] },
+    });
+    expect(bluesky.createRegistration).toHaveBeenCalledOnce();
+    expect(github.createRegistration).toHaveBeenCalledOnce();
+  });
+
   it('TC-AUTO-RUNTIME-127-01 status 异常与默认工厂保持惰性失败关闭', async () => {
     const handler = createLocalRuntimeToolHandler({
       github: {
@@ -161,6 +259,10 @@ describe('local runtime lazy GitHub wiring', () => {
       },
       weibo: {
         getStatus: vi.fn().mockRejectedValue(new Error('cookie private-cookie')),
+      },
+      bluesky: {
+        getStatus: vi.fn().mockRejectedValue(new Error('app-password private-secret')),
+        createRegistration: vi.fn(async () => null),
       },
       receipts: new MemoryReceipts(),
     });
@@ -175,8 +277,14 @@ describe('local runtime lazy GitHub wiring', () => {
       adapterReady: false,
       nextAction: 'Run marketing-ops doctor',
     });
+    expect(channels.find((channel) => channel.channel === 'bluesky')).toMatchObject({
+      health: 'blocked',
+      adapterReady: false,
+      nextAction: 'Run marketing-ops doctor',
+    });
     expect(JSON.stringify(status)).not.toContain('private-token');
     expect(JSON.stringify(status)).not.toContain('private-cookie');
+    expect(JSON.stringify(status)).not.toContain('private-secret');
 
     const withoutWeibo = createLocalRuntimeToolHandler({
       github: {
@@ -195,6 +303,12 @@ describe('local runtime lazy GitHub wiring', () => {
     });
 
     expect(marketingOpsDataRoot()).toContain('Application Support/marketing-ops');
+    expect(
+      createDefaultBlueskyClient({
+        handle: 'algorithms-visualization.bsky.social',
+        appPassword: 'abcd-efgh-ijkl-mnop',
+      }),
+    ).toMatchObject({ checkHealth: expect.any(Function) });
     expect(createDefaultLocalRuntimeToolHandler('/tmp/marketing-ops-lazy-test')).toBeTypeOf(
       'function',
     );

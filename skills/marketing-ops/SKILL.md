@@ -17,3 +17,5 @@ description: Safely prepare and operate owner-authorized Algorithm Visualizer ca
 12. A GitHub deletion is complete only after the known Release receipt is marked deleted and its adapter-owned `marketing/<campaignId>` tag is absent. Never delete an unknown Release or tag.
 13. Weibo health uses only the fixed official CLI `doctor` boundary. Until guided setup freezes the owner's zero-cost available `statuses` actions and activation is explicit, treat Weibo as disabled even when health later becomes ready.
 14. Never call Weibo token export, accept token environment variables, guess a dynamic action, or perform a Weibo write from the T3-D1-A contract-only adapter.
+15. Bluesky may publish only the single English text package produced by the public renderer. Treat it as disabled until `channels_status` reports `adapterReady: true`; setup health alone does not authorize a campaign write.
+16. Never ask for or accept a Bluesky main password or App Password in chat, tool input, environment variables, command arguments, or files. The owner enters a dedicated App Password only through `marketing-ops setup bluesky` in an interactive TTY.

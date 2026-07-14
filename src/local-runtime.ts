@@ -1,7 +1,11 @@
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { GitHubActivationStore } from './activation-store.js';
+import { BlueskyActivationStore } from './bluesky-activation-store.js';
+import { BlueskyChannelController, type PublicBlueskyChannelStatus } from './bluesky-channel.js';
 import { AdapterError } from './adapters/contract.js';
+import { BlueskyApiClient, type BlueskyCredentials } from './adapters/bluesky-api.js';
 import { GitHubCliClient } from './adapters/github-cli.js';
 import { WeiboCliClient } from './adapters/weibo-cli.js';
 import { GitHubChannelController, type PublicGitHubChannelStatus } from './github-channel.js';
@@ -11,10 +15,12 @@ import { GitHubCollector, type GitHubObservabilityClient } from './github-observ
 import { PublishService, type ReceiptRepository } from './publish-service.js';
 import { ReceiptStore, type PublicPostRef, type PublishReceipt } from './receipt-store.js';
 import { createRuntimeToolHandler } from './runtime-handler.js';
+import { MacOsKeychainSecretStore } from './security/secret-store.js';
 import { defaultChannelStatuses, type MarketingToolHandler } from './server-factory.js';
 import { WeiboChannelController, type PublicWeiboChannelStatus } from './weibo-channel.js';
 
 export const GITHUB_REPOSITORY = 'IllegalCreed/algorithms-visualization';
+const KEYCHAIN_HELPER = join(dirname(fileURLToPath(import.meta.url)), 'keychain-helper');
 
 interface GitHubRuntimeController {
   getStatus(): Promise<PublicGitHubChannelStatus>;
@@ -29,9 +35,15 @@ interface RuntimeReceiptRepository extends ReceiptRepository {
   markDeleted(idempotencyKey: string): Promise<PublishReceipt>;
 }
 
+interface BlueskyRuntimeController {
+  getStatus(): Promise<PublicBlueskyChannelStatus>;
+  createRegistration(): ReturnType<BlueskyChannelController['createRegistration']>;
+}
+
 interface LocalRuntimeOptions {
   github: GitHubRuntimeController;
   weibo?: { getStatus(): Promise<PublicWeiboChannelStatus> };
+  bluesky?: BlueskyRuntimeController;
   receipts: RuntimeReceiptRepository;
 }
 
@@ -45,14 +57,30 @@ function blockedGitHubStatus(): PublicGitHubChannelStatus {
   };
 }
 
+function blockedBlueskyStatus(): PublicBlueskyChannelStatus {
+  return {
+    channel: 'bluesky',
+    alias: null,
+    health: 'blocked',
+    adapterReady: false,
+    nextAction: 'Run marketing-ops doctor',
+  };
+}
+
 export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): MarketingToolHandler {
   const publishHandler = createRuntimeToolHandler({
     publish: async (input) => {
-      const registration = await options.github.createRegistration();
+      const request = TOOL_INPUT_SCHEMAS.publish_campaign.parse(input);
+      const channels = new Set(request.packages.map((packageValue) => packageValue.channel));
+      const registrations = [];
+      if (channels.has('github')) registrations.push(await options.github.createRegistration());
+      if (channels.has('bluesky') && options.bluesky) {
+        registrations.push(await options.bluesky.createRegistration());
+      }
       return new PublishService({
-        registrations: registration ? [registration] : [],
+        registrations: registrations.filter((registration) => registration !== null),
         receipts: options.receipts,
-      }).publish(input);
+      }).publish(request);
     },
   });
 
@@ -66,6 +94,7 @@ export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): Mar
         TOOL_INPUT_SCHEMAS.channels_status.parse(input);
         let github: PublicGitHubChannelStatus;
         let weibo: PublicWeiboChannelStatus | null = null;
+        let bluesky: PublicBlueskyChannelStatus | null = null;
         try {
           github = await options.github.getStatus();
         } catch {
@@ -84,9 +113,17 @@ export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): Mar
             };
           }
         }
+        if (options.bluesky) {
+          try {
+            bluesky = await options.bluesky.getStatus();
+          } catch {
+            bluesky = blockedBlueskyStatus();
+          }
+        }
         const channels = defaultChannelStatuses().map((status) => {
           if (status.channel === 'github') return github;
           if (status.channel === 'weibo' && weibo) return weibo;
+          if (status.channel === 'bluesky' && bluesky) return bluesky;
           return status;
         });
         return { data: { contractVersion: 2, channels } };
@@ -216,12 +253,27 @@ export function createDefaultWeiboController(): WeiboChannelController {
   return new WeiboChannelController({ client: new WeiboCliClient() });
 }
 
+export function createDefaultBlueskyClient(credentials: BlueskyCredentials): BlueskyApiClient {
+  return new BlueskyApiClient({ credentials });
+}
+
+export function createDefaultBlueskyController(
+  root: string = marketingOpsDataRoot(),
+): BlueskyChannelController {
+  return new BlueskyChannelController({
+    clients: createDefaultBlueskyClient,
+    activations: new BlueskyActivationStore(root),
+    secrets: new MacOsKeychainSecretStore(KEYCHAIN_HELPER),
+  });
+}
+
 export function createDefaultLocalRuntimeToolHandler(
   root: string = marketingOpsDataRoot(),
 ): MarketingToolHandler {
   return createLocalRuntimeToolHandler({
     github: createDefaultGitHubController(root),
     weibo: createDefaultWeiboController(),
+    bluesky: createDefaultBlueskyController(root),
     receipts: new ReceiptStore(root),
   });
 }

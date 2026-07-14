@@ -37,6 +37,18 @@ export default defineConfig({
           functions: 100,
           statements: 100,
         },
+        'src/bluesky-activation-store.ts': {
+          lines: 100,
+          branches: 100,
+          functions: 100,
+          statements: 100,
+        },
+        'src/bluesky-channel.ts': {
+          lines: 100,
+          branches: 100,
+          functions: 100,
+          statements: 100,
+        },
         'src/github-channel.ts': {
           lines: 100,
           branches: 80,

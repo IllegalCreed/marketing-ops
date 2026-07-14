@@ -24,6 +24,25 @@ export function createGitHubPackage(media: Array<'image' | 'gif' | 'video'> = []
   };
 }
 
+export function createBlueskyPackage(media: Array<'image' | 'gif' | 'video'> = []) {
+  const url =
+    'https://algo.illegalscreed.cn/en/docs/quick-sort/?utm_source=bluesky&utm_medium=social&utm_campaign=launch';
+  return {
+    channel: 'bluesky' as const,
+    format: 'post' as const,
+    utmMedium: 'social' as const,
+    variants: [
+      {
+        locale: 'en' as const,
+        title: 'Quick Sort visualization is live',
+        body: `Quick Sort visualization is live\n\nTrace partitioning step by step.\n\nOpen the visualization: ${url}`,
+        links: [url],
+        media,
+      },
+    ],
+  };
+}
+
 export function createPublishRequest() {
   return {
     campaignId: 'quick-sort-launch',
@@ -60,6 +79,19 @@ export function createPublishRequest() {
       failureMode: 'continue-supported' as const,
     },
     packages: [createGitHubPackage()],
+  };
+}
+
+export function createBlueskyPublishRequest() {
+  const request = createPublishRequest();
+  return {
+    ...request,
+    spec: {
+      ...request.spec,
+      locales: ['en'] as const,
+      channels: ['bluesky'] as const,
+    },
+    packages: [createBlueskyPackage()],
   };
 }
 
