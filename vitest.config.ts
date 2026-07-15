@@ -49,6 +49,36 @@ export default defineConfig({
           functions: 100,
           statements: 100,
         },
+        'src/dev-activation-store.ts': {
+          lines: 100,
+          branches: 100,
+          functions: 100,
+          statements: 100,
+        },
+        'src/dev-channel.ts': {
+          lines: 100,
+          branches: 100,
+          functions: 100,
+          statements: 100,
+        },
+        'src/dev-observability.ts': {
+          lines: 100,
+          branches: 100,
+          functions: 100,
+          statements: 100,
+        },
+        'src/adapters/dev-api.ts': {
+          lines: 95,
+          branches: 90,
+          functions: 100,
+          statements: 95,
+        },
+        'src/adapters/dev-article.ts': {
+          lines: 100,
+          branches: 100,
+          functions: 100,
+          statements: 100,
+        },
         'src/github-channel.ts': {
           lines: 100,
           branches: 80,

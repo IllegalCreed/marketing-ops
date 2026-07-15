@@ -3,11 +3,15 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GitHubActivationStore } from './activation-store.js';
 import { BlueskyActivationStore } from './bluesky-activation-store.js';
+import { DevActivationStore } from './dev-activation-store.js';
 import { BlueskyChannelController, type PublicBlueskyChannelStatus } from './bluesky-channel.js';
 import { AdapterError } from './adapters/contract.js';
 import { BlueskyApiClient, type BlueskyCredentials } from './adapters/bluesky-api.js';
+import { DevApiClient } from './adapters/dev-api.js';
 import { GitHubCliClient } from './adapters/github-cli.js';
 import { WeiboCliClient } from './adapters/weibo-cli.js';
+import { DevChannelController, type PublicDevChannelStatus } from './dev-channel.js';
+import { DevCollector, type DevObservabilityClient } from './dev-observability.js';
 import { GitHubChannelController, type PublicGitHubChannelStatus } from './github-channel.js';
 import { assertSafeToolInput, TOOL_INPUT_SCHEMAS } from './contract.js';
 import { MarketingOpsError } from './errors.js';
@@ -40,10 +44,17 @@ interface BlueskyRuntimeController {
   createRegistration(): ReturnType<BlueskyChannelController['createRegistration']>;
 }
 
+interface DevRuntimeController {
+  getStatus(): Promise<PublicDevChannelStatus>;
+  createRegistration(): ReturnType<DevChannelController['createRegistration']>;
+  createEnabledClient(): Promise<DevObservabilityClient | null>;
+}
+
 interface LocalRuntimeOptions {
   github: GitHubRuntimeController;
   weibo?: { getStatus(): Promise<PublicWeiboChannelStatus> };
   bluesky?: BlueskyRuntimeController;
+  dev?: DevRuntimeController;
   receipts: RuntimeReceiptRepository;
 }
 
@@ -67,6 +78,16 @@ function blockedBlueskyStatus(): PublicBlueskyChannelStatus {
   };
 }
 
+function blockedDevStatus(): PublicDevChannelStatus {
+  return {
+    channel: 'dev',
+    alias: null,
+    health: 'blocked',
+    adapterReady: false,
+    nextAction: 'Run marketing-ops doctor',
+  };
+}
+
 export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): MarketingToolHandler {
   const publishHandler = createRuntimeToolHandler({
     publish: async (input) => {
@@ -76,6 +97,9 @@ export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): Mar
       if (channels.has('github')) registrations.push(await options.github.createRegistration());
       if (channels.has('bluesky') && options.bluesky) {
         registrations.push(await options.bluesky.createRegistration());
+      }
+      if (channels.has('dev') && options.dev) {
+        registrations.push(await options.dev.createRegistration());
       }
       return new PublishService({
         registrations: registrations.filter((registration) => registration !== null),
@@ -95,6 +119,7 @@ export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): Mar
         let github: PublicGitHubChannelStatus;
         let weibo: PublicWeiboChannelStatus | null = null;
         let bluesky: PublicBlueskyChannelStatus | null = null;
+        let dev: PublicDevChannelStatus | null = null;
         try {
           github = await options.github.getStatus();
         } catch {
@@ -120,10 +145,18 @@ export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): Mar
             bluesky = blockedBlueskyStatus();
           }
         }
+        if (options.dev) {
+          try {
+            dev = await options.dev.getStatus();
+          } catch {
+            dev = blockedDevStatus();
+          }
+        }
         const channels = defaultChannelStatuses().map((status) => {
           if (status.channel === 'github') return github;
           if (status.channel === 'weibo' && weibo) return weibo;
           if (status.channel === 'bluesky' && bluesky) return bluesky;
+          if (status.channel === 'dev' && dev) return dev;
           return status;
         });
         return { data: { contractVersion: 2, channels } };
@@ -141,8 +174,10 @@ export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): Mar
       }
       if (name === 'list_feedback') {
         const request = TOOL_INPUT_SCHEMAS.list_feedback.parse(input);
-        if (request.postRef.channel !== 'github') return unavailableOperation();
-        const postRef = { ...request.postRef, channel: 'github' as const };
+        if (request.postRef.channel !== 'github' && request.postRef.channel !== 'dev') {
+          return unavailableOperation();
+        }
+        const postRef = request.postRef;
         const receipt = await options.receipts.findKnownPostRef(postRef);
         if (!receipt) {
           throw new MarketingOpsError('INVALID_INPUT', 'Known post receipt was not found');
@@ -150,16 +185,21 @@ export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): Mar
         if (receipt.status !== 'published') {
           throw new MarketingOpsError('INVALID_INPUT', 'Known post is not published');
         }
-        const collector = await enabledCollector(options.github);
+        if (postRef.channel === 'github') {
+          const collector = await enabledCollector(options.github);
+          return { data: await collector.listFeedback(postRef, request.cursor) };
+        }
+        if (!options.dev) return unavailableOperation();
+        const collector = await enabledDevCollector(options.dev);
         return { data: await collector.listFeedback(postRef, request.cursor) };
       }
       if (name === 'get_campaign_report') {
         const request = TOOL_INPUT_SCHEMAS.get_campaign_report.parse(input);
         const receipts = (await options.receipts.listByCampaign(request.campaignId)).filter(
           (receipt) =>
-            receipt.channel === 'github' &&
             receipt.status === 'published' &&
-            receipt.publicUrl.includes('/releases/'),
+            ((receipt.channel === 'github' && receipt.publicUrl.includes('/releases/')) ||
+              receipt.channel === 'dev'),
         );
         if (receipts.length === 0) {
           return {
@@ -167,13 +207,19 @@ export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): Mar
               campaignId: request.campaignId,
               window: request.window,
               status: 'unavailable',
-              reason: 'No published GitHub Release receipt was found',
+              reason: 'No published observable receipt was found',
             },
           };
         }
-        const collector = await enabledCollector(options.github);
         const channels = [];
-        for (const receipt of receipts) channels.push(await collector.collect(receipt));
+        for (const receipt of receipts) {
+          if (receipt.channel === 'github') {
+            channels.push(await (await enabledCollector(options.github)).collect(receipt));
+          } else {
+            if (!options.dev) return unavailableOperation();
+            channels.push(await (await enabledDevCollector(options.dev)).collect(receipt));
+          }
+        }
         return {
           data: {
             campaignId: request.campaignId,
@@ -247,6 +293,14 @@ async function enabledCollector(github: GitHubRuntimeController): Promise<GitHub
   return new GitHubCollector({ client, repository: GITHUB_REPOSITORY });
 }
 
+async function enabledDevCollector(dev: DevRuntimeController): Promise<DevCollector> {
+  const client = await dev.createEnabledClient();
+  if (!client) {
+    throw new MarketingOpsError('ADAPTER_UNAVAILABLE', 'DEV adapter is not enabled and ready');
+  }
+  return new DevCollector({ client });
+}
+
 export function marketingOpsDataRoot(): string {
   return join(homedir(), 'Library', 'Application Support', 'marketing-ops');
 }
@@ -280,6 +334,20 @@ export function createDefaultBlueskyController(
   });
 }
 
+export function createDefaultDevClient(apiKey: string): DevApiClient {
+  return new DevApiClient({ apiKey });
+}
+
+export function createDefaultDevController(
+  root: string = marketingOpsDataRoot(),
+): DevChannelController {
+  return new DevChannelController({
+    clients: createDefaultDevClient,
+    activations: new DevActivationStore(root),
+    secrets: new MacOsKeychainSecretStore(KEYCHAIN_HELPER),
+  });
+}
+
 export function createDefaultLocalRuntimeToolHandler(
   root: string = marketingOpsDataRoot(),
 ): MarketingToolHandler {
@@ -287,6 +355,7 @@ export function createDefaultLocalRuntimeToolHandler(
     github: createDefaultGitHubController(root),
     weibo: createDefaultWeiboController(),
     bluesky: createDefaultBlueskyController(root),
+    dev: createDefaultDevController(root),
     receipts: new ReceiptStore(root),
   });
 }

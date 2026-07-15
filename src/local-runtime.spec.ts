@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ChannelAdapter } from './adapters/contract.js';
 import {
   createDefaultBlueskyClient,
+  createDefaultDevClient,
   createDefaultLocalRuntimeToolHandler,
   createLocalRuntimeToolHandler,
   marketingOpsDataRoot,
@@ -355,6 +356,9 @@ describe('local runtime lazy GitHub wiring', () => {
         appPassword: 'abcd-efgh-ijkl-mnop',
       }),
     ).toMatchObject({ checkHealth: expect.any(Function) });
+    expect(createDefaultDevClient('dev-api-key-abcdefghijklmnop')).toMatchObject({
+      checkHealth: expect.any(Function),
+    });
     expect(createDefaultLocalRuntimeToolHandler('/tmp/marketing-ops-lazy-test')).toBeTypeOf(
       'function',
     );

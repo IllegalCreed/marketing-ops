@@ -14,6 +14,7 @@ import {
 import { MarketingOpsError } from './errors.js';
 import {
   createDefaultBlueskyController,
+  createDefaultDevController,
   createDefaultGitHubController,
   createDefaultWeiboController,
 } from './local-runtime.js';
@@ -109,6 +110,14 @@ async function runSetup(channelInput?: AutomaticChannel): Promise<void> {
     );
     return;
   }
+  if (channel === 'dev') {
+    const apiKey = await promptHidden('DEV API key: ');
+    const status = await createDefaultDevController().enable(apiKey);
+    process.stdout.write(
+      `DEV ${status.alias ?? 'account'} is ready. The adapter is enabled for owner-authorized campaigns.\n`,
+    );
+    return;
+  }
   if (plan.secretInput === 'official-browser') {
     process.stdout.write(
       channel === 'weibo'
@@ -118,7 +127,7 @@ async function runSetup(channelInput?: AutomaticChannel): Promise<void> {
     return;
   }
 
-  const value = await promptHidden('DEV API key: ');
+  const value = await promptHidden('Channel credential: ');
   const store = new MacOsKeychainSecretStore(KEYCHAIN_HELPER);
   await store.put(`channel/${channel}/${plan.method}`, value);
   process.stdout.write(
@@ -127,10 +136,11 @@ async function runSetup(channelInput?: AutomaticChannel): Promise<void> {
 }
 
 async function renderStatuses(): Promise<string> {
-  const [github, weibo, bluesky] = await Promise.all([
+  const [github, weibo, bluesky, dev] = await Promise.all([
     createDefaultGitHubController().getStatus(),
     createDefaultWeiboController().getStatus(),
     createDefaultBlueskyController().getStatus(),
+    createDefaultDevController().getStatus(),
   ]);
   return CHANNEL_SETUP_CATALOG.map((channel) => {
     if (channel.id === 'github') {
@@ -144,6 +154,10 @@ async function renderStatuses(): Promise<string> {
       const readiness = bluesky.adapterReady ? 'enabled' : 'setup-required';
       return `${channel.label.padEnd(14)} ${bluesky.health.padEnd(15)} ${readiness}`;
     }
+    if (channel.id === 'dev') {
+      const readiness = dev.adapterReady ? 'enabled' : 'setup-required';
+      return `${channel.label.padEnd(14)} ${dev.health.padEnd(15)} ${readiness}`;
+    }
     return `${channel.label.padEnd(14)} not-configured  Run marketing-ops setup ${channel.id}`;
   }).join('\n');
 }
@@ -155,13 +169,14 @@ async function main() {
   else if (options.command === 'status') process.stdout.write(`${await renderStatuses()}\n`);
   else {
     await access(KEYCHAIN_HELPER);
-    const [github, weibo, bluesky] = await Promise.all([
+    const [github, weibo, bluesky, dev] = await Promise.all([
       createDefaultGitHubController().getStatus(),
       createDefaultWeiboController().getStatus(),
       createDefaultBlueskyController().getStatus(),
+      createDefaultDevController().getStatus(),
     ]);
     process.stdout.write(
-      `Keychain helper: ready\nPrivate data root: ready\nMCP transport: stdio\nGitHub CLI: ${github.health}\nGitHub adapter: ${github.adapterReady ? 'enabled' : 'disabled'}\nWeibo CLI: ${weibo.health}\nWeibo adapter: disabled\nBluesky API: ${bluesky.health}\nBluesky adapter: ${bluesky.adapterReady ? 'enabled' : 'disabled'}\n`,
+      `Keychain helper: ready\nPrivate data root: ready\nMCP transport: stdio\nGitHub CLI: ${github.health}\nGitHub adapter: ${github.adapterReady ? 'enabled' : 'disabled'}\nWeibo CLI: ${weibo.health}\nWeibo adapter: disabled\nBluesky API: ${bluesky.health}\nBluesky adapter: ${bluesky.adapterReady ? 'enabled' : 'disabled'}\nDEV API: ${dev.health}\nDEV adapter: ${dev.adapterReady ? 'enabled' : 'disabled'}\n`,
     );
   }
 }

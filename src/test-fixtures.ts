@@ -43,6 +43,26 @@ export function createBlueskyPackage(media: Array<'image' | 'gif' | 'video'> = [
   };
 }
 
+export function createDevPackage(media: Array<'image' | 'gif' | 'video'> = []) {
+  const canonicalUrl = 'https://algo.illegalscreed.cn/en/docs/quick-sort/';
+  const url = `${canonicalUrl}?utm_source=dev&utm_medium=community&utm_campaign=launch&utm_content=dev-en-link-1`;
+  return {
+    channel: 'dev' as const,
+    format: 'article' as const,
+    utmMedium: 'community' as const,
+    canonicalUrl,
+    variants: [
+      {
+        locale: 'en' as const,
+        title: 'Quick Sort visualization is live',
+        body: `Trace partitioning step by step.\n\n[Open it](${url})`,
+        links: [url],
+        media,
+      },
+    ],
+  };
+}
+
 export function createPublishRequest() {
   return {
     campaignId: 'quick-sort-launch',
@@ -92,6 +112,20 @@ export function createBlueskyPublishRequest() {
       channels: ['bluesky'] as const,
     },
     packages: [createBlueskyPackage()],
+  };
+}
+
+export function createDevPublishRequest() {
+  const request = createPublishRequest();
+  return {
+    ...request,
+    spec: {
+      ...request.spec,
+      targetUrls: ['https://algo.illegalscreed.cn/en/docs/quick-sort/'],
+      locales: ['en'] as const,
+      channels: ['dev'] as const,
+    },
+    packages: [createDevPackage()],
   };
 }
 
