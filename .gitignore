@@ -4,3 +4,14 @@ coverage/
 .DS_Store
 *.log
 *.tmp
+
+# Credentials and local runtime state must never enter source control.
+.env
+.env.*
+!.env.example
+activations/
+receipts/
+profiles/
+state/
+.marketing-ops/
+storage-state*.json
