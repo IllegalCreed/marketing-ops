@@ -187,6 +187,7 @@ async function readBoundedJson(response: Response): Promise<unknown> {
 
 function htmlToText(value: string): string {
   return value
+    .replace(/<\/p>\s*<p(?:\s[^>]*)?>/gi, '\n\n')
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/p>/gi, '\n')
     .replace(/<[^>]+>/g, '')

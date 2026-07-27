@@ -189,6 +189,32 @@ describe('Mastodon API client', () => {
     await expect(
       htmlOnly.findRecentStatusByText('Hello & welcome\nnext <step>', '109876'),
     ).resolves.toMatchObject({ status: { text: 'Hello & welcome\nnext <step>' } });
+
+    const paragraphHtmlOnly = new MastodonApiClient({
+      credentials: { instanceUrl: INSTANCE_URL, accessToken: ACCESS_TOKEN },
+      fetcher: async () =>
+        jsonResponse([
+          {
+            id: '201',
+            uri: 'https://mastodon.social/users/illegalcreed/statuses/201',
+            created_at: '2026-07-16T01:00:00.000Z',
+            url: 'https://mastodon.social/@illegalcreed/201',
+            content: '<p>First paragraph</p><p>Second paragraph</p><p>Third paragraph</p>',
+            account: { id: '109876', acct: 'illegalcreed@mastodon.social' },
+            replies_count: 0,
+            reblogs_count: 0,
+            favourites_count: 0,
+          },
+        ]),
+    });
+    await expect(
+      paragraphHtmlOnly.findRecentStatusByText(
+        'First paragraph\n\nSecond paragraph\n\nThird paragraph',
+        '109876',
+      ),
+    ).resolves.toMatchObject({
+      status: { text: 'First paragraph\n\nSecond paragraph\n\nThird paragraph' },
+    });
   });
 
   it('TC-AUTO-MASTOAPI-127-05 创建状态使用 Idempotency-Key，语言与可见性显式透传', async () => {
