@@ -39,8 +39,8 @@ export const CHANNEL_SETUP_CATALOG = [
   {
     id: 'mastodon',
     label: 'Mastodon',
-    method: 'oauth',
-    secretInput: 'official-browser',
+    method: 'oauth-token',
+    secretInput: 'hidden-tty',
     persist: 'keychain',
     acceptsPrimaryPassword: false,
   },

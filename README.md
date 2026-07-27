@@ -22,6 +22,8 @@ T3-D2 adds the fixed official `@atproto/api@0.20.28` boundary for English Bluesk
 
 T3-D3 adds a fixed DEV/Forem v1 HTTP boundary using Node's built-in `fetch`. It only calls the documented authenticated-user, article, and comment endpoints under `https://dev.to/api`, sends the required Forem v1 `Accept` header, caps responses at 2 MB, and scans at most ten pages without automatic write retries. `dev-article@0.1.0` accepts one English, media-free renderer package, adds a hashed hidden marker, publishes with the project canonical URL, and reports article-level reactions/comments. Comment bodies remain explicitly untrusted. DEV author keys do not expose a true delete endpoint, so `reply=false` and `delete=false`; page views also remain unavailable until a stable typed response is verified. The adapter, hidden setup path, Keychain/0600 activation gate, runtime, and zero-side-effect campaign preflight are complete. One-time setup completed on 2026-07-15; status/doctor remain ready/enabled. The owner-authorized `marketing-ops-t3d3-smoke-127` then completed publish, exact public API body readback, same-receipt idempotency replay, feedback, and `1h` report reads. Receipt `4146005` is published and the article remains public by design.
 
+T3-D4-A adds a fixed per-instance Mastodon HTTP boundary using Node's built-in `fetch`. Setup accepts an HTTPS instance URL and access token only through an interactive TTY, stores the token in macOS Keychain, and writes only the public instance URL, account alias, and account ID to the strict 0600 activation record. `mastodon-status@0.1.0` accepts one English or Chinese, media-free renderer package, preserves every renderer link, enforces the 500-grapheme bound, and publishes a public status with language and `Idempotency-Key`. Runtime registration rechecks the live identity before use. Status-level favourites, boosts, replies, and matching notifications are readable; notification bodies remain untrusted. Engineering and local verification are complete; account setup and the owner-authorized live smoke remain pending.
+
 `all-or-none` calls must name an explicit channel set and provide one renderer package for every requested channel. The plugin rejects an unverifiable `all-authorized` set before any adapter can write.
 
 ## Commands
@@ -33,6 +35,8 @@ pnpm build
 node dist/cli.js setup
 node dist/cli.js setup github
 node dist/cli.js setup bluesky
+node dist/cli.js setup dev
+node dist/cli.js setup mastodon
 node dist/cli.js status
 node dist/cli.js doctor
 pnpm test:github-readonly
@@ -43,5 +47,7 @@ pnpm test:github-readonly
 For Bluesky, create a dedicated App Password in the official account settings immediately before one-time setup. Never use or enter the main account password. Setup health does not authorize a campaign write; a matching campaign still requires explicit owner authorization.
 
 For DEV, generate a dedicated API key from the account extensions settings, then run `node dist/cli.js setup dev` in an interactive terminal. The key is entered without echo and stored only in macOS Keychain. Setup performs a read-only `/users/me` identity check; it does not publish an article or authorize a later campaign.
+
+For Mastodon, create a dedicated access token on the chosen instance, then run `node dist/cli.js setup mastodon` in an interactive terminal. Enter the instance root URL visibly and the token at the hidden prompt. Setup performs only a credentials/identity check; a later live campaign still requires separate matching owner authorization.
 
 Never pass a password, token, Cookie, or browser Profile through command-line arguments, environment variables, JSON files, chat, logs, or MCP tool inputs.

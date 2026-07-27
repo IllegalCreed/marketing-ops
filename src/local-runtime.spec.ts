@@ -5,11 +5,16 @@ import {
   createDefaultDevClient,
   createDefaultLocalRuntimeToolHandler,
   createLocalRuntimeToolHandler,
+  createDefaultMastodonClient,
   marketingOpsDataRoot,
 } from './local-runtime.js';
 import type { AdapterRegistration, ReceiptRepository } from './publish-service.js';
 import type { PublishReceipt } from './receipt-store.js';
-import { createBlueskyPublishRequest, createPublishRequest } from './test-fixtures.js';
+import {
+  createBlueskyPublishRequest,
+  createMastodonPublishRequest,
+  createPublishRequest,
+} from './test-fixtures.js';
 
 class MemoryReceipts implements ReceiptRepository {
   readonly values = new Map<string, PublishReceipt>();
@@ -127,6 +132,42 @@ function blueskyAdapter() {
   return value;
 }
 
+function mastodonAdapter() {
+  const value: ChannelAdapter = {
+    definition: {
+      channel: 'mastodon',
+      version: 'mastodon-test@1.0.0',
+      capabilities: {
+        publish: true,
+        status: true,
+        metrics: true,
+        feedback: true,
+        reply: false,
+        delete: true,
+      },
+    },
+    expectedFormat: 'status',
+    preflight: vi.fn(async () => undefined),
+    publish: vi.fn<ChannelAdapter['publish']>(async (input) => ({
+      reused: false,
+      receipt: {
+        schemaVersion: 1 as const,
+        campaignId: input.campaignId,
+        channel: 'mastodon' as const,
+        postId: '201',
+        publicUrl: 'https://mastodon.social/@illegalcreed/201',
+        publishedAt: '2026-07-16T01:00:00.000Z',
+        contentHash: input.contentHash,
+        idempotencyKey: input.idempotencyKey,
+        adapterVersion: 'mastodon-test@1.0.0',
+        status: 'published' as const,
+      },
+    })),
+    delete: vi.fn(async () => ({ status: 'deleted' as const })),
+  };
+  return value;
+}
+
 describe('local runtime lazy GitHub wiring', () => {
   it('TC-AUTO-RUNTIME-127-01 status 动态但 publish 仅在 activation+health ready 时注入', async () => {
     const githubAdapter = adapter();
@@ -161,6 +202,17 @@ describe('local runtime lazy GitHub wiring', () => {
           nextAction: 'Run marketing-ops setup bluesky',
         })),
         createRegistration: vi.fn(async () => null),
+      },
+      mastodon: {
+        getStatus: vi.fn(async () => ({
+          channel: 'mastodon' as const,
+          alias: 'illegalcreed@mastodon.social',
+          health: 'ready' as const,
+          adapterReady: false,
+          nextAction: 'Run marketing-ops setup mastodon',
+        })),
+        createRegistration: vi.fn(async () => null),
+        createEnabledClient: vi.fn(async () => null),
       },
       receipts: new MemoryReceipts(),
     });
@@ -297,6 +349,50 @@ describe('local runtime lazy GitHub wiring', () => {
     expect(bluesky.createRegistration).toHaveBeenCalledTimes(2);
   });
 
+  it('TC-AUTO-MASTORUNTIME-127-01 只为请求中的 Mastodon 惰性注册 adapter', async () => {
+    const adapter = mastodonAdapter();
+    const github = {
+      getStatus: vi.fn(),
+      createRegistration: vi.fn(async () => null),
+      createEnabledClient: vi.fn(async () => null),
+    };
+    const mastodon = {
+      getStatus: vi.fn(async () => ({
+        channel: 'mastodon' as const,
+        alias: 'illegalcreed@mastodon.social',
+        health: 'ready' as const,
+        adapterReady: true,
+        nextAction: null,
+      })),
+      createRegistration: vi.fn(async (): Promise<AdapterRegistration> => ({
+        adapter,
+        enabled: true,
+        health: 'ready',
+      })),
+      createEnabledClient: vi.fn(async () => ({
+        getStatus: vi.fn(),
+        listNotifications: vi.fn(),
+      })),
+    };
+    const handler = createLocalRuntimeToolHandler({
+      github,
+      mastodon,
+      receipts: new MemoryReceipts(),
+    });
+
+    await expect(
+      handler('publish_campaign', createMastodonPublishRequest()),
+    ).resolves.toMatchObject({
+      data: {
+        receipts: [{ channel: 'mastodon', postId: '201' }],
+        failures: [],
+      },
+    });
+    expect(mastodon.createRegistration).toHaveBeenCalledOnce();
+    expect(github.createRegistration).not.toHaveBeenCalled();
+    expect(adapter.publish).toHaveBeenCalledOnce();
+  });
+
   it('TC-AUTO-RUNTIME-127-01 status 异常与默认工厂保持惰性失败关闭', async () => {
     const handler = createLocalRuntimeToolHandler({
       github: {
@@ -310,6 +406,11 @@ describe('local runtime lazy GitHub wiring', () => {
       bluesky: {
         getStatus: vi.fn().mockRejectedValue(new Error('app-password private-secret')),
         createRegistration: vi.fn(async () => null),
+      },
+      mastodon: {
+        getStatus: vi.fn().mockRejectedValue(new Error('access-token private-secret')),
+        createRegistration: vi.fn(async () => null),
+        createEnabledClient: vi.fn(async () => null),
       },
       receipts: new MemoryReceipts(),
     });
@@ -325,6 +426,11 @@ describe('local runtime lazy GitHub wiring', () => {
       nextAction: 'Run marketing-ops doctor',
     });
     expect(channels.find((channel) => channel.channel === 'bluesky')).toMatchObject({
+      health: 'blocked',
+      adapterReady: false,
+      nextAction: 'Run marketing-ops doctor',
+    });
+    expect(channels.find((channel) => channel.channel === 'mastodon')).toMatchObject({
       health: 'blocked',
       adapterReady: false,
       nextAction: 'Run marketing-ops doctor',
@@ -359,6 +465,12 @@ describe('local runtime lazy GitHub wiring', () => {
     expect(createDefaultDevClient('dev-api-key-abcdefghijklmnop')).toMatchObject({
       checkHealth: expect.any(Function),
     });
+    expect(
+      createDefaultMastodonClient({
+        instanceUrl: 'https://mastodon.social',
+        accessToken: 'mastodon-access-token-abcdefghijklmnop',
+      }),
+    ).toMatchObject({ checkHealth: expect.any(Function) });
     expect(createDefaultLocalRuntimeToolHandler('/tmp/marketing-ops-lazy-test')).toBeTypeOf(
       'function',
     );

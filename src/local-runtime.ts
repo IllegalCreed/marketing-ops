@@ -8,11 +8,15 @@ import { BlueskyChannelController, type PublicBlueskyChannelStatus } from './blu
 import { AdapterError } from './adapters/contract.js';
 import { BlueskyApiClient, type BlueskyCredentials } from './adapters/bluesky-api.js';
 import { DevApiClient } from './adapters/dev-api.js';
+import { MastodonApiClient, type MastodonCredentials } from './adapters/mastodon-api.js';
 import { GitHubCliClient } from './adapters/github-cli.js';
 import { WeiboCliClient } from './adapters/weibo-cli.js';
 import { DevChannelController, type PublicDevChannelStatus } from './dev-channel.js';
 import { DevCollector, type DevObservabilityClient } from './dev-observability.js';
 import { GitHubChannelController, type PublicGitHubChannelStatus } from './github-channel.js';
+import { MastodonChannelController, type PublicMastodonChannelStatus } from './mastodon-channel.js';
+import { MastodonCollector, type MastodonObservabilityClient } from './mastodon-observability.js';
+import { MastodonActivationStore } from './mastodon-activation-store.js';
 import { assertSafeToolInput, TOOL_INPUT_SCHEMAS } from './contract.js';
 import { MarketingOpsError } from './errors.js';
 import { GitHubCollector, type GitHubObservabilityClient } from './github-observability.js';
@@ -50,11 +54,18 @@ interface DevRuntimeController {
   createEnabledClient(): Promise<DevObservabilityClient | null>;
 }
 
+interface MastodonRuntimeController {
+  getStatus(): Promise<PublicMastodonChannelStatus>;
+  createRegistration(): ReturnType<MastodonChannelController['createRegistration']>;
+  createEnabledClient(): Promise<MastodonObservabilityClient | null>;
+}
+
 interface LocalRuntimeOptions {
   github: GitHubRuntimeController;
   weibo?: { getStatus(): Promise<PublicWeiboChannelStatus> };
   bluesky?: BlueskyRuntimeController;
   dev?: DevRuntimeController;
+  mastodon?: MastodonRuntimeController;
   receipts: RuntimeReceiptRepository;
 }
 
@@ -88,6 +99,16 @@ function blockedDevStatus(): PublicDevChannelStatus {
   };
 }
 
+function blockedMastodonStatus(): PublicMastodonChannelStatus {
+  return {
+    channel: 'mastodon',
+    alias: null,
+    health: 'blocked',
+    adapterReady: false,
+    nextAction: 'Run marketing-ops doctor',
+  };
+}
+
 export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): MarketingToolHandler {
   const publishHandler = createRuntimeToolHandler({
     publish: async (input) => {
@@ -100,6 +121,9 @@ export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): Mar
       }
       if (channels.has('dev') && options.dev) {
         registrations.push(await options.dev.createRegistration());
+      }
+      if (channels.has('mastodon') && options.mastodon) {
+        registrations.push(await options.mastodon.createRegistration());
       }
       return new PublishService({
         registrations: registrations.filter((registration) => registration !== null),
@@ -120,6 +144,7 @@ export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): Mar
         let weibo: PublicWeiboChannelStatus | null = null;
         let bluesky: PublicBlueskyChannelStatus | null = null;
         let dev: PublicDevChannelStatus | null = null;
+        let mastodon: PublicMastodonChannelStatus | null = null;
         try {
           github = await options.github.getStatus();
         } catch {
@@ -152,11 +177,19 @@ export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): Mar
             dev = blockedDevStatus();
           }
         }
+        if (options.mastodon) {
+          try {
+            mastodon = await options.mastodon.getStatus();
+          } catch {
+            mastodon = blockedMastodonStatus();
+          }
+        }
         const channels = defaultChannelStatuses().map((status) => {
           if (status.channel === 'github') return github;
           if (status.channel === 'weibo' && weibo) return weibo;
           if (status.channel === 'bluesky' && bluesky) return bluesky;
           if (status.channel === 'dev' && dev) return dev;
+          if (status.channel === 'mastodon' && mastodon) return mastodon;
           return status;
         });
         return { data: { contractVersion: 2, channels } };
@@ -174,7 +207,11 @@ export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): Mar
       }
       if (name === 'list_feedback') {
         const request = TOOL_INPUT_SCHEMAS.list_feedback.parse(input);
-        if (request.postRef.channel !== 'github' && request.postRef.channel !== 'dev') {
+        if (
+          request.postRef.channel !== 'github' &&
+          request.postRef.channel !== 'dev' &&
+          request.postRef.channel !== 'mastodon'
+        ) {
           return unavailableOperation();
         }
         const postRef = request.postRef;
@@ -189,6 +226,11 @@ export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): Mar
           const collector = await enabledCollector(options.github);
           return { data: await collector.listFeedback(postRef, request.cursor) };
         }
+        if (postRef.channel === 'mastodon') {
+          if (!options.mastodon) return unavailableOperation();
+          const collector = await enabledMastodonCollector(options.mastodon);
+          return { data: await collector.listFeedback(postRef) };
+        }
         if (!options.dev) return unavailableOperation();
         const collector = await enabledDevCollector(options.dev);
         return { data: await collector.listFeedback(postRef, request.cursor) };
@@ -199,7 +241,8 @@ export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): Mar
           (receipt) =>
             receipt.status === 'published' &&
             ((receipt.channel === 'github' && receipt.publicUrl.includes('/releases/')) ||
-              receipt.channel === 'dev'),
+              receipt.channel === 'dev' ||
+              receipt.channel === 'mastodon'),
         );
         if (receipts.length === 0) {
           return {
@@ -215,6 +258,11 @@ export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): Mar
         for (const receipt of receipts) {
           if (receipt.channel === 'github') {
             channels.push(await (await enabledCollector(options.github)).collect(receipt));
+          } else if (receipt.channel === 'mastodon') {
+            if (!options.mastodon) return unavailableOperation();
+            channels.push(
+              await (await enabledMastodonCollector(options.mastodon)).collect(receipt),
+            );
           } else {
             if (!options.dev) return unavailableOperation();
             channels.push(await (await enabledDevCollector(options.dev)).collect(receipt));
@@ -246,7 +294,9 @@ export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): Mar
             ? await options.github.createRegistration()
             : receipt.channel === 'bluesky' && options.bluesky
               ? await options.bluesky.createRegistration()
-              : null;
+              : receipt.channel === 'mastodon' && options.mastodon
+                ? await options.mastodon.createRegistration()
+                : null;
         if (
           !registration ||
           !registration.enabled ||
@@ -301,6 +351,16 @@ async function enabledDevCollector(dev: DevRuntimeController): Promise<DevCollec
   return new DevCollector({ client });
 }
 
+async function enabledMastodonCollector(
+  mastodon: MastodonRuntimeController,
+): Promise<MastodonCollector> {
+  const client = await mastodon.createEnabledClient();
+  if (!client) {
+    throw new MarketingOpsError('ADAPTER_UNAVAILABLE', 'Mastodon adapter is not enabled and ready');
+  }
+  return new MastodonCollector({ client });
+}
+
 export function marketingOpsDataRoot(): string {
   return join(homedir(), 'Library', 'Application Support', 'marketing-ops');
 }
@@ -338,12 +398,26 @@ export function createDefaultDevClient(apiKey: string): DevApiClient {
   return new DevApiClient({ apiKey });
 }
 
+export function createDefaultMastodonClient(credentials: MastodonCredentials): MastodonApiClient {
+  return new MastodonApiClient({ credentials });
+}
+
 export function createDefaultDevController(
   root: string = marketingOpsDataRoot(),
 ): DevChannelController {
   return new DevChannelController({
     clients: createDefaultDevClient,
     activations: new DevActivationStore(root),
+    secrets: new MacOsKeychainSecretStore(KEYCHAIN_HELPER),
+  });
+}
+
+export function createDefaultMastodonController(
+  root: string = marketingOpsDataRoot(),
+): MastodonChannelController {
+  return new MastodonChannelController({
+    clients: createDefaultMastodonClient,
+    activations: new MastodonActivationStore(root),
     secrets: new MacOsKeychainSecretStore(KEYCHAIN_HELPER),
   });
 }
@@ -356,6 +430,7 @@ export function createDefaultLocalRuntimeToolHandler(
     weibo: createDefaultWeiboController(),
     bluesky: createDefaultBlueskyController(root),
     dev: createDefaultDevController(root),
+    mastodon: createDefaultMastodonController(root),
     receipts: new ReceiptStore(root),
   });
 }

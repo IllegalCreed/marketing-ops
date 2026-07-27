@@ -13,7 +13,7 @@ describe('marketing-ops onboarding', () => {
       ['weibo', 'device-oauth'],
       ['bluesky', 'app-password'],
       ['dev', 'api-key'],
-      ['mastodon', 'oauth'],
+      ['mastodon', 'oauth-token'],
     ]);
     expect(CHANNEL_SETUP_CATALOG.every((channel) => !channel.acceptsPrimaryPassword)).toBe(true);
   });
@@ -25,7 +25,7 @@ describe('marketing-ops onboarding', () => {
       requiresJson: false,
     });
     expect(planChannelSetup('mastodon')).toMatchObject({
-      secretInput: 'official-browser',
+      secretInput: 'hidden-tty',
       persist: 'keychain',
       requiresJson: false,
     });
@@ -36,6 +36,7 @@ describe('marketing-ops onboarding', () => {
       assertSecureSetupInvocation(['setup', 'dev'], { DEV_API_KEY: 'unsafe' }, true),
     ).toThrow(/secret.*environment/i);
     expect(() => assertSecureSetupInvocation(['setup', 'dev'], {}, false)).toThrow(/tty/i);
+    expect(() => assertSecureSetupInvocation(['setup', 'mastodon'], {}, false)).toThrow(/tty/i);
   });
 
   it('TC-AUTO-SETUP-127-03 status/doctor 只返回别名、健康与下一步', () => {

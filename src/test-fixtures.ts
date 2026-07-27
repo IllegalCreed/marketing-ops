@@ -63,6 +63,26 @@ export function createDevPackage(media: Array<'image' | 'gif' | 'video'> = []) {
   };
 }
 
+export function createMastodonPackage(media: Array<'image' | 'gif' | 'video'> = []) {
+  const canonicalUrl = 'https://algo.illegalscreed.cn/en/docs/quick-sort/';
+  const url = `${canonicalUrl}?utm_source=mastodon&utm_medium=social&utm_campaign=launch&utm_content=mastodon-en-link-1`;
+  return {
+    channel: 'mastodon' as const,
+    format: 'status' as const,
+    utmMedium: 'social' as const,
+    canonicalUrl,
+    variants: [
+      {
+        locale: 'en' as const,
+        title: 'Quick Sort visualization is live',
+        body: `Quick Sort visualization is live\n\nTrace partitioning step by step.\n\nOpen the visualization: ${url}`,
+        links: [url],
+        media,
+      },
+    ],
+  };
+}
+
 export function createPublishRequest() {
   return {
     campaignId: 'quick-sort-launch',
@@ -126,6 +146,20 @@ export function createDevPublishRequest() {
       channels: ['dev'] as const,
     },
     packages: [createDevPackage()],
+  };
+}
+
+export function createMastodonPublishRequest() {
+  const request = createPublishRequest();
+  return {
+    ...request,
+    spec: {
+      ...request.spec,
+      targetUrls: ['https://algo.illegalscreed.cn/en/docs/quick-sort/'],
+      locales: ['en'] as const,
+      channels: ['mastodon'] as const,
+    },
+    packages: [createMastodonPackage()],
   };
 }
 
