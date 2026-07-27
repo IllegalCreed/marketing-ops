@@ -9,7 +9,8 @@
     "marketing-ops": "./dist/cli.js"
   },
   "scripts": {
-    "build": "pnpm clean && tsc -p tsconfig.build.json && xcrun swiftc src/security/keychain-helper.swift -o dist/keychain-helper",
+    "build": "pnpm clean && tsc -p tsconfig.build.json && pnpm bundle:server && xcrun swiftc src/security/keychain-helper.swift -o dist/keychain-helper",
+    "bundle:server": "esbuild src/server.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/server.js --sourcemap",
     "clean": "rm -rf dist coverage",
     "type-check": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
@@ -29,6 +30,7 @@
   "devDependencies": {
     "@types/node": "^25.9.3",
     "@vitest/coverage-v8": "^4.1.9",
+    "esbuild": "0.27.0",
     "prettier": "^3.8.4",
     "typescript": "~6.0.3",
     "vitest": "^4.1.9"
