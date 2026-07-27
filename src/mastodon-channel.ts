@@ -88,12 +88,12 @@ export class MastodonChannelController {
         'Mastodon instance identity did not match',
       );
     }
-    await this.#secrets.put(MASTODON_ACCESS_TOKEN_REF, credentials.accessToken);
     await this.#activations.enable({
       instanceUrl: health.instanceUrl,
       alias: health.alias,
       accountId: health.accountId,
     });
+    await this.#secrets.put(MASTODON_ACCESS_TOKEN_REF, credentials.accessToken);
     return publicStatus(health.alias, 'ready', true);
   }
 

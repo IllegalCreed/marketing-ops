@@ -80,6 +80,26 @@ describe('Mastodon API client', () => {
     });
   });
 
+  it('TC-AUTO-MASTOAPI-127-02A 本地 acct 补全为完整公开句柄', async () => {
+    const client = new MastodonApiClient({
+      credentials: { instanceUrl: INSTANCE_URL, accessToken: ACCESS_TOKEN },
+      fetcher: async () =>
+        jsonResponse({
+          id: '109876',
+          acct: 'illegalcreed',
+          url: 'https://mastodon.social/@illegalcreed',
+        }),
+    });
+
+    await expect(client.checkHealth()).resolves.toMatchObject({
+      health: 'ready',
+      instanceUrl: INSTANCE_URL,
+      alias: 'illegalcreed@mastodon.social',
+      accountId: '109876',
+      reason: 'READY',
+    });
+  });
+
   it('TC-AUTO-MASTOAPI-127-03 健康异常映射 reauth、rate-limit 与 invalid-response', async () => {
     const unauthorized = new MastodonApiClient({
       credentials: { instanceUrl: INSTANCE_URL, accessToken: ACCESS_TOKEN },

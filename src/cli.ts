@@ -48,6 +48,7 @@ async function promptHidden(message: string): Promise<string> {
   }
   process.stdout.write(message);
   const wasRaw = process.stdin.isRaw;
+  const wasPaused = process.stdin.isPaused();
   process.stdin.setRawMode(true);
   process.stdin.resume();
   return new Promise<string>((resolve, reject) => {
@@ -55,6 +56,7 @@ async function promptHidden(message: string): Promise<string> {
     const cleanup = () => {
       process.stdin.off('data', onData);
       process.stdin.setRawMode(Boolean(wasRaw));
+      if (wasPaused) process.stdin.pause();
       process.stdout.write('\n');
     };
     const onData = (chunk: Buffer) => {

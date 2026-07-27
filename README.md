@@ -2,10 +2,10 @@
 
 Local, credential-isolated campaign publishing and feedback collection for multiple projects.
 
-Marketing Ops is a private Codex plugin with a seven-tool MCP interface. Platform credentials are
-shared at the channel level and stay in macOS Keychain; project destinations and channel policy live
-in strict local Project Profiles. Receipts, activations, and profiles stay outside Git and are never
-returned to Codex with secret material.
+Marketing Ops is a local Codex plugin with a public source repository and a seven-tool MCP
+interface. Platform credentials are shared at the channel level and stay in macOS Keychain; project
+destinations and channel policy live in strict local Project Profiles. Receipts, activations, and
+profiles stay outside Git and are never returned to Codex with secret material.
 
 There is no web management UI. The CLI is only for guided first-time setup and diagnostics. Normal
 campaign work starts from a natural-language request in Codex.

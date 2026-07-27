@@ -143,6 +143,10 @@ export function normalizeMastodonCredentials(value: MastodonCredentials): Mastod
   return { instanceUrl, accessToken: rawToken };
 }
 
+function publicAccountAlias(acct: string, instanceUrl: string): string {
+  return acct.includes('@') ? acct : `${acct}@${new URL(instanceUrl).hostname}`;
+}
+
 function retryAfter(response: Response): number | undefined {
   const value = response.headers.get('retry-after');
   if (!value) return undefined;
@@ -242,7 +246,7 @@ export class MastodonApiClient {
       return {
         health: 'ready',
         instanceUrl: this.#credentials.instanceUrl,
-        alias: parsed.data.acct,
+        alias: publicAccountAlias(parsed.data.acct, this.#credentials.instanceUrl),
         accountId: parsed.data.id,
         reason: 'READY',
       };

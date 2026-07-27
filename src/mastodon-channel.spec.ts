@@ -138,6 +138,19 @@ describe('Mastodon channel controller', () => {
     }
   });
 
+  it('TC-AUTO-MASTODONCHANNEL-127-03A activation 身份无效时不保存 access token', async () => {
+    const keychain = secrets();
+    const controller = new MastodonChannelController(
+      options(await root(), keychain.store, client('ready', 'illegalcreed')),
+    );
+
+    await expect(
+      controller.enable({ instanceUrl: INSTANCE_URL, accessToken: ACCESS_TOKEN }),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+    expect(keychain.store.put).not.toHaveBeenCalled();
+    expect(keychain.values.has(MASTODON_ACCESS_TOKEN_REF)).toBe(false);
+  });
+
   it('TC-AUTO-MASTODONCHANNEL-127-04 activation 存在但 Keychain 缺失时要求重新接入', async () => {
     const directory = await root();
     await new MastodonActivationStore(directory).enable({
