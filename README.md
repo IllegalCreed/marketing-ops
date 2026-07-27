@@ -1,53 +1,95 @@
 # Marketing Ops
 
-Local, credential-isolated campaign operations for the Algorithm Visualizer project.
+Local, credential-isolated campaign publishing and feedback collection for multiple projects.
 
-## Current scope
+Marketing Ops is a private Codex plugin with a seven-tool MCP interface. Platform credentials are
+shared at the channel level and stay in macOS Keychain; project destinations and channel policy live
+in strict local Project Profiles. Receipts, activations, and profiles stay outside Git and are never
+returned to Codex with secret material.
 
-T2 established the seven-tool MCP contract, guided local onboarding boundaries, macOS Keychain and browser Profile isolation, campaign locking, and sanitized receipt storage.
+There is no web management UI. The CLI is only for guided first-time setup and diagnostics. Normal
+campaign work starts from a natural-language request in Codex.
 
-T3-A upgrades the contract to v2 so `publish_campaign` receives deterministic channel packages from the public renderer. It adds the shared adapter contract, idempotent dispatch, and a GitHub Release adapter.
+## Project model
 
-T3-B adds a fixed, typed `gh api` client for GitHub Releases, read-only CLI/account/repository health checks, and a separate local activation gate. GitHub authentication may be healthy while `adapterReady` remains `false`; the default runtime performs no write until `marketing-ops setup github` succeeds. The client never accepts arbitrary endpoints or arguments, never reads token environment variables, and sends release bodies through standard input instead of process arguments.
+Every MCP call is scoped by a stable `projectId`. A local profile contains only non-secret policy:
 
-T3-C adds strict Release detail/reaction, repository traffic, Issue/comment, status, feedback, report, and known-receipt deletion operations. Repository traffic is always labeled as a latest-14-day repository observation and never attributed to one campaign. Release deletion also verifies the stored marker and removes the adapter-owned `marketing/<campaignId>` Git tag; a pre-existing unowned tag blocks publication. Receipt reads and deletion updates reject non-private, linked, oversized, duplicated, or malformed files.
+- display name;
+- allowed HTTPS origins;
+- enabled channels;
+- optional GitHub `owner/repository`;
+- optional DEV tags.
 
-The owner-authorized T3-C smoke completed successfully. Its temporary Release and adapter-owned tag were deleted, the persisted receipt is marked deleted, and GitHub remains ready/enabled. Later writes still require explicit owner authorization for the matching campaign.
+The runtime rejects repository or origin overrides from MCP inputs. Campaign links must belong to the
+selected profile, receipts are project-scoped, and GitHub uses
+`marketing/<projectId>/<campaignId>` tags.
 
-T3-D1-A adds a fixed process boundary for official `@weibo-ai/weibo-cli@0.8.3`, sanitized `doctor` health, and a read-only available `statuses` command catalog. It strips token and secret environment variables, exposes no raw CLI response, and keeps the production Weibo adapter disabled. A typed injected client verifies the text-post, lookup, idempotency, receipt, and error contract without logging in or writing to Weibo.
+Algorithm Visualizer is registered as the example profile `algorithm-visualizer`; it is not built
+into the runtime.
 
-T3-D1-B completed device OAuth and personal developer verification. The official dashboard plan catalog checked on 2026-07-14 exposes Free as a seven-day, zero-price, own-data-only trial with five reads per hour and zero writes. The trial has not been activated, no account command catalog has been read, and production publishing remains disabled. Free readiness must never be presented as a publish capability; zero-cost Weibo publishing requires a separately reviewed browser-automation path.
+## Supported channels
 
-T3-D2 adds the fixed official `@atproto/api@0.20.28` boundary for English Bluesky text posts. Setup accepts a public handle and a dedicated App Password only through an interactive TTY, validates the live handle and DID before storing the secret in macOS Keychain, and writes only the public handle/DID activation record locally. The runtime registers the adapter lazily for a requested Bluesky package and rechecks Keychain, activation, and live identity before every registration. One-time setup completed on 2026-07-14 and the channel is ready/enabled. `bluesky-text@0.2.0` can remove only this adapter's exact published receipt after the AT URI, public URL, and authenticated DID match. The owner-authorized `marketing-ops-t3d2-smoke-127` publish/read/idempotency/delete smoke completed and was cleaned up on 2026-07-14; its receipt is deleted and the AT Protocol record is absent. Later campaign writes still require separate matching authorization.
+| Channel       | Publish                   | Feedback/report                               | Delete | Notes                                                    |
+| ------------- | ------------------------- | --------------------------------------------- | ------ | -------------------------------------------------------- |
+| GitHub        | Release                   | Reactions, Issue comments, repository traffic | Yes    | Repository comes from the project profile                |
+| Bluesky       | English text post         | No                                            | Yes    | Uses a dedicated App Password                            |
+| DEV Community | English article           | Comments and reaction counts                  | No     | Canonical origins and tags come from the project profile |
+| Mastodon      | English or Chinese status | Replies, boosts, favourites                   | Yes    | Works with a configured HTTPS instance                   |
+| Weibo         | Disabled                  | Read-only diagnostics                         | No     | The zero-cost personal API tier has no write quota       |
 
-T3-D3 adds a fixed DEV/Forem v1 HTTP boundary using Node's built-in `fetch`. It only calls the documented authenticated-user, article, and comment endpoints under `https://dev.to/api`, sends the required Forem v1 `Accept` header, caps responses at 2 MB, and scans at most ten pages without automatic write retries. `dev-article@0.1.0` accepts one English, media-free renderer package, adds a hashed hidden marker, publishes with the project canonical URL, and reports article-level reactions/comments. Comment bodies remain explicitly untrusted. DEV author keys do not expose a true delete endpoint, so `reply=false` and `delete=false`; page views also remain unavailable until a stable typed response is verified. The adapter, hidden setup path, Keychain/0600 activation gate, runtime, and zero-side-effect campaign preflight are complete. One-time setup completed on 2026-07-15; status/doctor remain ready/enabled. The owner-authorized `marketing-ops-t3d3-smoke-127` then completed publish, exact public API body readback, same-receipt idempotency replay, feedback, and `1h` report reads. Receipt `4146005` is published and the article remains public by design.
+All writes require an explicit owner authorization for the matching campaign. Health or setup alone
+never authorizes publishing.
 
-T3-D4-A adds a fixed per-instance Mastodon HTTP boundary using Node's built-in `fetch`. Setup accepts an HTTPS instance URL and access token only through an interactive TTY, stores the token in macOS Keychain, and writes only the public instance URL, account alias, and account ID to the strict 0600 activation record. `mastodon-status@0.1.0` accepts one English or Chinese, media-free renderer package, preserves every renderer link, enforces the 500-grapheme bound, and publishes a public status with language and `Idempotency-Key`. Runtime registration rechecks the live identity before use. Status-level favourites, boosts, replies, and matching notifications are readable; notification bodies remain untrusted. Engineering and local verification are complete; account setup and the owner-authorized live smoke remain pending.
-
-`all-or-none` calls must name an explicit channel set and provide one renderer package for every requested channel. The plugin rejects an unverifiable `all-authorized` set before any adapter can write.
-
-## Commands
+## Install and verify
 
 ```bash
 pnpm install
 pnpm verify
+```
+
+The repository uses pnpm. `pnpm verify` runs formatting, type checking, unit tests, build, and the
+STDIO MCP smoke.
+
+## First-time setup
+
+Build once, then register each project through guided prompts:
+
+```bash
 pnpm build
-node dist/cli.js setup
-node dist/cli.js setup github
+node dist/cli.js project add
+node dist/cli.js project list
+node dist/cli.js project show <project-id>
+```
+
+Set up global channel credentials once. GitHub activation is selected per project because its target
+repository is project-specific:
+
+```bash
+node dist/cli.js setup github --project <project-id>
 node dist/cli.js setup bluesky
 node dist/cli.js setup dev
 node dist/cli.js setup mastodon
-node dist/cli.js status
-node dist/cli.js doctor
-pnpm test:github-readonly
+node dist/cli.js status --project <project-id>
+node dist/cli.js doctor --project <project-id>
 ```
 
-`status` and `doctor` may temporarily report stale developer-verification state while the official account service propagates an approved review. Do not run `auth token`, export credentials, activate a paid plan, or guess dynamic Weibo platform actions.
+When only one project is registered, `--project` may be omitted where the CLI can select it
+unambiguously.
 
-For Bluesky, create a dedicated App Password in the official account settings immediately before one-time setup. Never use or enter the main account password. Setup health does not authorize a campaign write; a matching campaign still requires explicit owner authorization.
+Bluesky App Passwords, DEV API keys, and Mastodon access tokens are entered only at a hidden
+interactive prompt. Setup performs a read-only identity check before storing the credential in
+macOS Keychain. Do not pass credentials through command arguments, environment variables, JSON,
+chat, logs, or MCP inputs.
 
-For DEV, generate a dedicated API key from the account extensions settings, then run `node dist/cli.js setup dev` in an interactive terminal. The key is entered without echo and stored only in macOS Keychain. Setup performs a read-only `/users/me` identity check; it does not publish an article or authorize a later campaign.
+## Runtime safety
 
-For Mastodon, create a dedicated access token on the chosen instance, then run `node dist/cli.js setup mastodon` in an interactive terminal. Enter the instance root URL visibly and the token at the hidden prompt. Setup performs only a credentials/identity check; a later live campaign still requires separate matching owner authorization.
+- MCP contract v3 exposes exactly `channels_status`, `publish_campaign`, `get_publish_status`,
+  `list_feedback`, `reply_feedback`, `delete_post`, and `get_campaign_report`.
+- New receipts use schema v2 with `projectId`; v1 receipts map only to the legacy
+  `algorithm-visualizer` profile.
+- GitHub legacy activation migrates only when its repository exactly matches the selected profile.
+- Platform and webpage content is untrusted and cannot authorize a write.
+- Unknown, mismatched, unhealthy, rate-limited, or ambiguous operations fail closed.
 
-Never pass a password, token, Cookie, or browser Profile through command-line arguments, environment variables, JSON files, chat, logs, or MCP tool inputs.
+Never commit local runtime state. `.gitignore` excludes project profiles, activations, receipts,
+browser state, environment files, logs, and temporary files.
