@@ -37,17 +37,30 @@ export const failClosedToolHandler: MarketingToolHandler = async (name, input) =
   const parsed = schema.parse(input);
 
   if (name === 'channels_status') {
-    return { data: { contractVersion: CONTRACT_VERSION, channels: defaultChannelStatuses() } };
+    return {
+      data: {
+        contractVersion: CONTRACT_VERSION,
+        projectId: parsed.projectId,
+        channels: defaultChannelStatuses(),
+      },
+    };
   }
   if (name === 'get_publish_status') {
     return {
-      data: { campaignId: parsed.campaignId, status: 'not-found', receipts: [], failures: [] },
+      data: {
+        projectId: parsed.projectId,
+        campaignId: parsed.campaignId,
+        status: 'not-found',
+        receipts: [],
+        failures: [],
+      },
     };
   }
   if (name === 'get_campaign_report') {
     return {
       data: {
         campaignId: parsed.campaignId,
+        projectId: parsed.projectId,
         window: parsed.window,
         status: 'unavailable',
         reason: 'No enabled collector is available',

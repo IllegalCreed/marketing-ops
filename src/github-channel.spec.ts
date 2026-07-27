@@ -6,6 +6,7 @@ import { GitHubActivationStore } from './activation-store.js';
 import { GitHubChannelController } from './github-channel.js';
 
 const REPOSITORY = 'IllegalCreed/algorithms-visualization';
+const PROJECT_ID = 'algorithm-visualizer';
 const roots: string[] = [];
 
 afterEach(async () => {
@@ -53,7 +54,7 @@ describe('GitHub activation and channel controller', () => {
     const gh = client();
     const controller = new GitHubChannelController({
       client: gh,
-      activations: new GitHubActivationStore(directory, REPOSITORY),
+      activations: new GitHubActivationStore(directory, PROJECT_ID, REPOSITORY),
       repository: REPOSITORY,
     });
 
@@ -72,6 +73,7 @@ describe('GitHub activation and channel controller', () => {
     const directory = await root();
     const store = new GitHubActivationStore(
       directory,
+      PROJECT_ID,
       REPOSITORY,
       () => '2026-07-11T10:00:00.000Z',
     );
@@ -87,12 +89,13 @@ describe('GitHub activation and channel controller', () => {
       adapterReady: true,
       nextAction: null,
     });
-    const path = join(directory, 'activations', 'github.json');
+    const path = join(directory, 'activations', 'github', `${PROJECT_ID}.json`);
     expect((await stat(path)).mode & 0o777).toBe(0o600);
     const raw = await readFile(path, 'utf8');
     expect(JSON.parse(raw)).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       channel: 'github',
+      projectId: PROJECT_ID,
       repository: REPOSITORY,
       enabled: true,
       enabledAt: '2026-07-11T10:00:00.000Z',
@@ -119,14 +122,14 @@ describe('GitHub activation and channel controller', () => {
 
     const blocked = new GitHubChannelController({
       client: client('reauth-required'),
-      activations: new GitHubActivationStore(await root(), REPOSITORY),
+      activations: new GitHubActivationStore(await root(), PROJECT_ID, REPOSITORY),
       repository: REPOSITORY,
     });
     await expect(blocked.enable()).rejects.toMatchObject({ code: 'REAUTH_REQUIRED' });
 
     const unavailable = new GitHubChannelController({
       client: client('blocked'),
-      activations: new GitHubActivationStore(await root(), REPOSITORY),
+      activations: new GitHubActivationStore(await root(), PROJECT_ID, REPOSITORY),
       repository: REPOSITORY,
     });
     await expect(unavailable.enable()).rejects.toMatchObject({ code: 'ADAPTER_UNAVAILABLE' });
@@ -134,41 +137,102 @@ describe('GitHub activation and channel controller', () => {
 
   it('TC-AUTO-ACTIVATION-127-02 默认时钟有效且仓库参数严格', async () => {
     const directory = await root();
-    const activation = await new GitHubActivationStore(directory, REPOSITORY).enable();
+    const activation = await new GitHubActivationStore(directory, PROJECT_ID, REPOSITORY).enable();
 
     expect(Number.isNaN(Date.parse(activation.enabledAt))).toBe(false);
-    expect(() => new GitHubActivationStore(directory, 'IllegalCreed/repo;rm')).toThrow(
+    expect(() => new GitHubActivationStore(directory, PROJECT_ID, 'IllegalCreed/repo;rm')).toThrow(
       /owner\/name/i,
     );
+    expect(() => new GitHubActivationStore(directory, '../escape', REPOSITORY)).toThrow();
+  });
+
+  it('TC-AUTO-MIGRATION-133-01 旧 GitHub activation 仅仓库匹配时迁移到项目目录', async () => {
+    const directory = await root();
+    const activationDirectory = join(directory, 'activations');
+    await mkdir(activationDirectory, { recursive: true, mode: 0o700 });
+    await writeFile(
+      join(activationDirectory, 'github.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        channel: 'github',
+        repository: REPOSITORY,
+        enabled: true,
+        enabledAt: '2026-07-11T10:00:00.000Z',
+      }),
+      { mode: 0o600 },
+    );
+
+    const store = new GitHubActivationStore(directory, PROJECT_ID, REPOSITORY);
+    await expect(store.get()).resolves.toMatchObject({
+      schemaVersion: 2,
+      projectId: PROJECT_ID,
+      repository: REPOSITORY,
+    });
+    expect(
+      (await stat(join(activationDirectory, 'github', `${PROJECT_ID}.json`))).mode & 0o777,
+    ).toBe(0o600);
+    await expect(
+      new GitHubActivationStore(directory, 'another-project', 'IllegalCreed/another').get(),
+    ).resolves.toBeNull();
+
+    const malformedRoot = await root();
+    await mkdir(join(malformedRoot, 'activations'), { recursive: true, mode: 0o700 });
+    await writeFile(join(malformedRoot, 'activations', 'github.json'), '{broken', {
+      mode: 0o600,
+    });
+    await expect(
+      new GitHubActivationStore(malformedRoot, PROJECT_ID, REPOSITORY).get(),
+    ).rejects.toMatchObject({ code: 'STORAGE_CORRUPTED' });
+
+    const exposedRoot = await root();
+    await mkdir(join(exposedRoot, 'activations'), { recursive: true, mode: 0o700 });
+    const exposedPath = join(exposedRoot, 'activations', 'github.json');
+    await writeFile(
+      exposedPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        channel: 'github',
+        repository: REPOSITORY,
+        enabled: true,
+        enabledAt: '2026-07-11T10:00:00.000Z',
+      }),
+      { mode: 0o600 },
+    );
+    await chmod(exposedPath, 0o644);
+    await expect(
+      new GitHubActivationStore(exposedRoot, PROJECT_ID, REPOSITORY).get(),
+    ).rejects.toMatchObject({ code: 'STORAGE_CORRUPTED' });
   });
 
   it('TC-AUTO-ACTIVATION-127-03 损坏、错仓库与未来版本失败关闭', async () => {
     for (const value of [
       '{broken',
       JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         channel: 'github',
+        projectId: PROJECT_ID,
         repository: 'someone/else',
         enabled: true,
         enabledAt: '2026-07-11T10:00:00.000Z',
       }),
       JSON.stringify({
-        schemaVersion: 2,
+        schemaVersion: 3,
         channel: 'github',
+        projectId: PROJECT_ID,
         repository: REPOSITORY,
         enabled: true,
         enabledAt: '2026-07-11T10:00:00.000Z',
       }),
     ]) {
       const directory = await root();
-      const activationDirectory = join(directory, 'activations');
+      const activationDirectory = join(directory, 'activations', 'github');
       await mkdir(activationDirectory, { recursive: true, mode: 0o700 });
-      const path = join(activationDirectory, 'github.json');
+      const path = join(activationDirectory, `${PROJECT_ID}.json`);
       await writeFile(path, value, { mode: 0o600 });
       await chmod(path, 0o600);
       const controller = new GitHubChannelController({
         client: client(),
-        activations: new GitHubActivationStore(directory, REPOSITORY),
+        activations: new GitHubActivationStore(directory, PROJECT_ID, REPOSITORY),
         repository: REPOSITORY,
       });
 
@@ -179,12 +243,39 @@ describe('GitHub activation and channel controller', () => {
       await expect(controller.createRegistration()).resolves.toBeNull();
       await expect(controller.enable()).rejects.toMatchObject({ code: 'STORAGE_CORRUPTED' });
     }
+
+    const exposedDirectory = await root();
+    const exposedActivationDirectory = join(exposedDirectory, 'activations', 'github');
+    await mkdir(exposedActivationDirectory, { recursive: true, mode: 0o700 });
+    const exposedPath = join(exposedActivationDirectory, `${PROJECT_ID}.json`);
+    await writeFile(
+      exposedPath,
+      JSON.stringify({
+        schemaVersion: 2,
+        channel: 'github',
+        projectId: PROJECT_ID,
+        repository: REPOSITORY,
+        enabled: true,
+        enabledAt: '2026-07-11T10:00:00.000Z',
+      }),
+      { mode: 0o600 },
+    );
+    await chmod(exposedPath, 0o644);
+    await expect(
+      new GitHubActivationStore(exposedDirectory, PROJECT_ID, REPOSITORY).get(),
+    ).rejects.toMatchObject({ code: 'STORAGE_CORRUPTED' });
+
+    const blockedDirectory = await root();
+    await writeFile(join(blockedDirectory, 'activations'), 'not a directory', { mode: 0o600 });
+    await expect(
+      new GitHubActivationStore(blockedDirectory, PROJECT_ID, REPOSITORY).get(),
+    ).rejects.toMatchObject({ code: 'STORAGE_CORRUPTED' });
   });
 
   it('TC-AUTO-GHAUTH-127-05 公开状态不包含内部授权细节', async () => {
     const controller = new GitHubChannelController({
       client: client('reauth-required'),
-      activations: new GitHubActivationStore(await root(), REPOSITORY),
+      activations: new GitHubActivationStore(await root(), PROJECT_ID, REPOSITORY),
       repository: REPOSITORY,
     });
     const status = await controller.getStatus();

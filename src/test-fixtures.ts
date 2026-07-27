@@ -85,8 +85,9 @@ export function createMastodonPackage(media: Array<'image' | 'gif' | 'video'> = 
 
 export function createPublishRequest() {
   return {
+    projectId: 'algorithm-visualizer',
     campaignId: 'quick-sort-launch',
-    idempotencyKey: 'campaign-v2/quick-sort-launch/abc12345',
+    idempotencyKey: 'campaign-v3/algorithm-visualizer/quick-sort-launch/abc12345',
     authorization: {
       source: 'owner-prompt' as const,
       authorizedAt: '2026-07-11T00:00:00.000Z',
@@ -166,6 +167,7 @@ export function createMastodonPublishRequest() {
 export function createAdapterPublishInput() {
   const request = createPublishRequest();
   return {
+    projectId: request.projectId,
     campaignId: request.campaignId,
     idempotencyKey: `${request.idempotencyKey}/github`,
     contentHash: TEST_CONTENT_HASH,

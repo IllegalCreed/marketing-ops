@@ -38,10 +38,24 @@ function collectObjectSchemas(value: unknown, result: Record<string, unknown>[] 
 
 describe('marketing-ops MCP contract', () => {
   it('TC-AUTO-MCP-127-01 只公开七个稳定高层工具', () => {
-    expect(CONTRACT_VERSION).toBe(2);
+    expect(CONTRACT_VERSION).toBe(3);
     expect(TOOL_NAMES).toEqual(EXPECTED_TOOLS);
     expect(TOOL_DEFINITIONS.map((tool) => tool.name)).toEqual(EXPECTED_TOOLS);
     expect(SERVER_INSTRUCTIONS.slice(0, 512)).toMatch(/credentials.*never.*returned/i);
+  });
+
+  it('TC-AUTO-CONTRACT-133-01 七工具全部要求 projectId 且不接受任意目标覆盖', () => {
+    for (const tool of TOOL_DEFINITIONS) {
+      expect(tool.inputSchema.required).toContain('projectId');
+      expect((tool.inputSchema.properties as Record<string, unknown>).projectId).toBeDefined();
+      expect(JSON.stringify(tool.inputSchema)).not.toMatch(
+        /repositoryOverride|originOverride|targetRepository|localPath/i,
+      );
+    }
+
+    expect(() => TOOL_INPUT_SCHEMAS.publish_campaign.parse(createPublishRequest())).not.toThrow();
+    const { projectId: _projectId, ...withoutProject } = createPublishRequest();
+    expect(() => TOOL_INPUT_SCHEMAS.publish_campaign.parse(withoutProject)).toThrow();
   });
 
   it('TC-AUTO-MCP-127-02 schema 全部闭合且不存在任意执行面', () => {

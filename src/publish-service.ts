@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import { TOOL_INPUT_SCHEMAS, type ChannelId, type PublishCampaignInput } from './contract.js';
 import type { PublishReceipt } from './receipt-store.js';
+import { receiptProjectId } from './receipt-store.js';
+import { assertProjectPublishRequest } from './project-policy.js';
+import type { ProjectProfile } from './project-profile-store.js';
 import {
   AdapterError,
   type AdapterErrorCode,
@@ -30,12 +33,14 @@ export interface PublishFailure {
 }
 
 export interface PublishServiceResult {
+  projectId: string;
   campaignId: string;
   receipts: PublishReceipt[];
   failures: PublishFailure[];
 }
 
 interface PublishServiceOptions {
+  profile: ProjectProfile;
   registrations: AdapterRegistration[];
   receipts: ReceiptRepository;
 }
@@ -52,7 +57,7 @@ function packageHash(value: PublishCampaignInput['packages'][number]): string {
 
 function channelIdempotencyKey(request: PublishCampaignInput, channel: ChannelId): string {
   const digest = createHash('sha256').update(request.idempotencyKey).digest('hex').slice(0, 32);
-  return `campaign-v2/${request.campaignId}/${channel}/${digest}`;
+  return `campaign-v3/${request.projectId}/${request.campaignId}/${channel}/${digest}`;
 }
 
 function asFailure(channel: ChannelId, error: unknown): PublishFailure {
@@ -79,6 +84,8 @@ function asFailure(channel: ChannelId, error: unknown): PublishFailure {
 
 function assertReceiptMatches(input: AdapterPublishInput, receipt: PublishReceipt): void {
   if (
+    receipt.schemaVersion !== 2 ||
+    receiptProjectId(receipt) !== input.projectId ||
     receipt.campaignId !== input.campaignId ||
     receipt.channel !== input.package.channel ||
     receipt.idempotencyKey !== input.idempotencyKey ||
@@ -95,6 +102,7 @@ function assertReceiptMatches(input: AdapterPublishInput, receipt: PublishReceip
 export class PublishService {
   readonly #registrations: ReadonlyMap<ChannelId, AdapterRegistration>;
   readonly #receipts: ReceiptRepository;
+  readonly #profile: ProjectProfile;
 
   constructor(options: PublishServiceOptions) {
     const entries = options.registrations.map(
@@ -107,10 +115,12 @@ export class PublishService {
     }
     this.#registrations = new Map(entries);
     this.#receipts = options.receipts;
+    this.#profile = options.profile;
   }
 
   async publish(value: unknown): Promise<PublishServiceResult> {
     const request = TOOL_INPUT_SCHEMAS.publish_campaign.parse(value);
+    assertProjectPublishRequest(this.#profile, request);
     const receipts: PublishReceipt[] = [];
     const failures: PublishFailure[] = [];
     const prepared: PreparedPublication[] = [];
@@ -119,10 +129,22 @@ export class PublishService {
       const channel = packageValue.channel;
       const idempotencyKey = channelIdempotencyKey(request, channel);
       const contentHash = packageHash(packageValue);
+      const input: AdapterPublishInput = {
+        projectId: request.projectId,
+        campaignId: request.campaignId,
+        idempotencyKey,
+        contentHash,
+        package: packageValue,
+      };
       const existing = await this.#receipts.getByIdempotencyKey(idempotencyKey);
       if (existing) {
         if (existing.contentHash === contentHash) {
-          receipts.push(existing);
+          try {
+            assertReceiptMatches(input, existing);
+            receipts.push(existing);
+          } catch (error) {
+            failures.push(asFailure(channel, error));
+          }
         } else {
           failures.push({
             channel,
@@ -143,12 +165,6 @@ export class PublishService {
         });
         continue;
       }
-      const input: AdapterPublishInput = {
-        campaignId: request.campaignId,
-        idempotencyKey,
-        contentHash,
-        package: packageValue,
-      };
       try {
         await registration.adapter.preflight(input);
         prepared.push({ channel, registration, input });
@@ -176,6 +192,11 @@ export class PublishService {
       }
     }
 
-    return { campaignId: request.campaignId, receipts, failures };
+    return {
+      projectId: request.projectId,
+      campaignId: request.campaignId,
+      receipts,
+      failures,
+    };
   }
 }

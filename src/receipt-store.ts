@@ -32,8 +32,10 @@ const CHANNEL_IDS = [
   'x',
 ] as const;
 
-export interface PublishReceipt {
-  schemaVersion: 1;
+export const LEGACY_PROJECT_ID = 'algorithm-visualizer';
+const PROJECT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+interface ReceiptFields {
   campaignId: string;
   channel: (typeof CHANNEL_IDS)[number];
   postId: string;
@@ -45,13 +47,24 @@ export interface PublishReceipt {
   status: 'queued' | 'published' | 'failed' | 'deleted';
 }
 
+export interface LegacyPublishReceipt extends ReceiptFields {
+  schemaVersion: 1;
+}
+
+export interface ProjectPublishReceipt extends ReceiptFields {
+  schemaVersion: 2;
+  projectId: string;
+}
+
+export type PublishReceipt = LegacyPublishReceipt | ProjectPublishReceipt;
+
 export interface PublicPostRef {
   channel: PublishReceipt['channel'];
   postId: string;
   publicUrl: string;
 }
 
-const RECEIPT_KEYS = [
+const BASE_RECEIPT_KEYS = [
   'schemaVersion',
   'campaignId',
   'channel',
@@ -63,6 +76,7 @@ const RECEIPT_KEYS = [
   'adapterVersion',
   'status',
 ] as const;
+const PROJECT_RECEIPT_KEYS = [...BASE_RECEIPT_KEYS, 'projectId'] as const;
 const MAX_RECEIPT_BYTES = 65_536;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -78,10 +92,11 @@ function requireString(record: Record<string, unknown>, key: string): string {
 }
 
 function parseReceipt(value: unknown): PublishReceipt {
-  if (!isRecord(value) || Object.keys(value).some((key) => !RECEIPT_KEYS.includes(key as never))) {
+  if (!isRecord(value) || (value.schemaVersion !== 1 && value.schemaVersion !== 2)) {
     throw new MarketingOpsError('STORAGE_CORRUPTED', 'Receipt schema is invalid');
   }
-  if (value.schemaVersion !== 1) {
+  const allowedKeys = value.schemaVersion === 1 ? BASE_RECEIPT_KEYS : PROJECT_RECEIPT_KEYS;
+  if (Object.keys(value).some((key) => !allowedKeys.includes(key as never))) {
     throw new MarketingOpsError('STORAGE_CORRUPTED', 'Receipt schema is invalid');
   }
   const channel = requireString(value, 'channel');
@@ -98,8 +113,7 @@ function parseReceipt(value: unknown): PublishReceipt {
   ) {
     throw new MarketingOpsError('STORAGE_CORRUPTED', 'Receipt schema is invalid');
   }
-  return {
-    schemaVersion: 1,
+  const fields: ReceiptFields = {
     campaignId: requireString(value, 'campaignId'),
     channel: channel as PublishReceipt['channel'],
     postId: requireString(value, 'postId'),
@@ -110,6 +124,16 @@ function parseReceipt(value: unknown): PublishReceipt {
     adapterVersion: requireString(value, 'adapterVersion'),
     status: status as PublishReceipt['status'],
   };
+  if (value.schemaVersion === 1) return { schemaVersion: 1, ...fields };
+  const projectId = requireString(value, 'projectId');
+  if (!PROJECT_ID_PATTERN.test(projectId)) {
+    throw new MarketingOpsError('STORAGE_CORRUPTED', 'Receipt schema is invalid');
+  }
+  return { schemaVersion: 2, projectId, ...fields };
+}
+
+export function receiptProjectId(receipt: PublishReceipt): string {
+  return receipt.schemaVersion === 1 ? LEGACY_PROJECT_ID : receipt.projectId;
 }
 
 function isMissing(error: unknown): boolean {
@@ -169,21 +193,67 @@ export class ReceiptStore {
     }
   }
 
-  async listByCampaign(campaignId: string): Promise<PublishReceipt[]> {
-    return (await this.#allReceipts()).filter((receipt) => receipt.campaignId === campaignId);
+  async listByCampaign(campaignId: string): Promise<PublishReceipt[]>;
+  async listByCampaign(projectId: string, campaignId: string): Promise<PublishReceipt[]>;
+  async listByCampaign(
+    projectIdOrCampaignId: string,
+    campaignIdInput?: string,
+  ): Promise<PublishReceipt[]> {
+    const projectId = campaignIdInput === undefined ? LEGACY_PROJECT_ID : projectIdOrCampaignId;
+    const campaignId = campaignIdInput ?? projectIdOrCampaignId;
+    return (await this.#allReceipts()).filter(
+      (receipt) => receiptProjectId(receipt) === projectId && receipt.campaignId === campaignId,
+    );
   }
 
-  async findKnownPostRef(postRef: PublicPostRef): Promise<PublishReceipt | null> {
-    return this.#uniquePostRefMatch(await this.#allReceipts(), postRef);
+  async findKnownPostRef(postRef: PublicPostRef): Promise<PublishReceipt | null>;
+  async findKnownPostRef(projectId: string, postRef: PublicPostRef): Promise<PublishReceipt | null>;
+  async findKnownPostRef(
+    projectIdOrPostRef: string | PublicPostRef,
+    postRefInput?: PublicPostRef,
+  ): Promise<PublishReceipt | null> {
+    const projectId =
+      typeof projectIdOrPostRef === 'string' ? projectIdOrPostRef : LEGACY_PROJECT_ID;
+    const postRef = typeof projectIdOrPostRef === 'string' ? postRefInput : projectIdOrPostRef;
+    if (!postRef) throw new MarketingOpsError('INVALID_INPUT', 'Post reference is required');
+    return this.#uniquePostRefMatch(
+      (await this.#allReceipts()).filter((receipt) => receiptProjectId(receipt) === projectId),
+      postRef,
+    );
   }
 
-  async findByPostRef(campaignId: string, postRef: PublicPostRef): Promise<PublishReceipt | null> {
-    return this.#uniquePostRefMatch(await this.listByCampaign(campaignId), postRef);
+  async findByPostRef(campaignId: string, postRef: PublicPostRef): Promise<PublishReceipt | null>;
+  async findByPostRef(
+    projectId: string,
+    campaignId: string,
+    postRef: PublicPostRef,
+  ): Promise<PublishReceipt | null>;
+  async findByPostRef(
+    projectIdOrCampaignId: string,
+    campaignIdOrPostRef: string | PublicPostRef,
+    postRefInput?: PublicPostRef,
+  ): Promise<PublishReceipt | null> {
+    const legacy = typeof campaignIdOrPostRef !== 'string';
+    const projectId = legacy ? LEGACY_PROJECT_ID : projectIdOrCampaignId;
+    const campaignId = legacy ? projectIdOrCampaignId : campaignIdOrPostRef;
+    const postRef = legacy ? campaignIdOrPostRef : postRefInput;
+    if (!postRef) throw new MarketingOpsError('INVALID_INPUT', 'Post reference is required');
+    return this.#uniquePostRefMatch(await this.listByCampaign(projectId, campaignId), postRef);
   }
 
-  async markDeleted(idempotencyKey: string): Promise<PublishReceipt> {
+  async markDeleted(idempotencyKey: string): Promise<PublishReceipt>;
+  async markDeleted(projectId: string, idempotencyKey: string): Promise<PublishReceipt>;
+  async markDeleted(
+    projectIdOrIdempotencyKey: string,
+    idempotencyKeyInput?: string,
+  ): Promise<PublishReceipt> {
+    const projectId =
+      idempotencyKeyInput === undefined ? LEGACY_PROJECT_ID : projectIdOrIdempotencyKey;
+    const idempotencyKey = idempotencyKeyInput ?? projectIdOrIdempotencyKey;
     const existing = await this.getByIdempotencyKey(idempotencyKey);
-    if (!existing) throw new MarketingOpsError('INVALID_INPUT', 'Known receipt was not found');
+    if (!existing || receiptProjectId(existing) !== projectId) {
+      throw new MarketingOpsError('INVALID_INPUT', 'Known receipt was not found');
+    }
     if (existing.status === 'deleted') return existing;
     const receipt = parseReceipt({ ...existing, status: 'deleted' });
     const temporary = join(this.#directory, `.${randomUUID()}.tmp`);

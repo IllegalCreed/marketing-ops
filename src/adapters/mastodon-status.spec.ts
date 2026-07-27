@@ -9,6 +9,7 @@ import {
 
 function input() {
   return {
+    projectId: 'algorithm-visualizer',
     campaignId: 'quick-sort-launch',
     idempotencyKey: 'campaign-v2/quick-sort-launch/mastodon/abc12345',
     contentHash: TEST_CONTENT_HASH,

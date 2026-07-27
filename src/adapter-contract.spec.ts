@@ -76,7 +76,8 @@ describe('shared channel adapter contract', () => {
     });
 
     expect(receipt).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
+      projectId: 'algorithm-visualizer',
       campaignId: 'quick-sort-launch',
       channel: 'github',
       postId: '123',
@@ -84,7 +85,7 @@ describe('shared channel adapter contract', () => {
         'https://github.com/IllegalCreed/algorithms-visualization/releases/tag/marketing%2Fquick-sort-launch',
       publishedAt: '2026-07-11T00:00:00.000Z',
       contentHash: 'a'.repeat(64),
-      idempotencyKey: 'campaign-v2/quick-sort-launch/abc12345/github',
+      idempotencyKey: 'campaign-v3/algorithm-visualizer/quick-sort-launch/abc12345/github',
       adapterVersion: 'github-release@1.0.0',
       status: 'published',
     });

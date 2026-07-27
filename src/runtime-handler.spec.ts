@@ -56,11 +56,14 @@ describe('runtime MCP handler bridge', () => {
   it('TC-AUTO-DISPATCH-127-01 非发布工具继续走默认失败关闭边界', async () => {
     const handler = createRuntimeToolHandler({ publish: vi.fn() });
 
-    await expect(handler('channels_status', {})).resolves.toMatchObject({
-      data: { contractVersion: 2 },
+    await expect(
+      handler('channels_status', { projectId: 'algorithm-visualizer' }),
+    ).resolves.toMatchObject({
+      data: { contractVersion: 3, projectId: 'algorithm-visualizer' },
     });
     await expect(
       handler('list_feedback', {
+        projectId: 'algorithm-visualizer',
         postRef: {
           channel: 'github',
           postId: '123',

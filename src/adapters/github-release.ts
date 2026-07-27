@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { PublishReceipt } from '../receipt-store.js';
+import { receiptProjectId } from '../receipt-store.js';
 import {
   AdapterError,
   createPublishedReceipt,
@@ -45,7 +46,7 @@ export interface GitHubReleaseClient {
 
 const DEFINITION = defineAdapter({
   channel: 'github',
-  version: 'github-release@1.2.0',
+  version: 'github-release@1.3.0',
   capabilities: {
     publish: true,
     status: true,
@@ -56,13 +57,15 @@ const DEFINITION = defineAdapter({
   },
 });
 
-function markerForValues(contentHash: string, idempotencyKey: string): string {
+function markerForValues(contentHash: string, idempotencyKey: string, projectId?: string): string {
   const idempotencyHash = createHash('sha256').update(idempotencyKey).digest('hex');
-  return `<!-- marketing-ops:v1 content-sha256=${contentHash} idempotency-sha256=${idempotencyHash} -->`;
+  return projectId
+    ? `<!-- marketing-ops:v2 project=${projectId} content-sha256=${contentHash} idempotency-sha256=${idempotencyHash} -->`
+    : `<!-- marketing-ops:v1 content-sha256=${contentHash} idempotency-sha256=${idempotencyHash} -->`;
 }
 
 function markerFor(input: AdapterPublishInput): string {
-  return markerForValues(input.contentHash, input.idempotencyKey);
+  return markerForValues(input.contentHash, input.idempotencyKey, input.projectId);
 }
 
 function heading(locale: 'zh-CN' | 'en'): string {
@@ -79,7 +82,7 @@ export function buildGitHubReleaseDraft(value: unknown): GitHubReleaseDraft {
     (variant) => `## ${heading(variant.locale)}\n\n### ${variant.title}\n\n${variant.body}`,
   );
   return {
-    tagName: `marketing/${input.campaignId}`,
+    tagName: `marketing/${input.projectId}/${input.campaignId}`,
     name: input.package.variants.map((variant) => variant.title).join(' / '),
     body: `${markerFor(input)}\n\n${sections.join('\n\n')}`,
     draft: false,
@@ -178,13 +181,17 @@ export class GitHubReleaseAdapter implements ChannelAdapter {
   async delete(receipt: PublishReceipt): Promise<{ status: 'deleted' | 'already-deleted' }> {
     requireAdapterCapability(this.definition, 'delete');
     const releaseId = Number(receipt.postId);
-    const tagName = `marketing/${receipt.campaignId}`;
+    const projectId = receiptProjectId(receipt);
+    const tagName =
+      receipt.schemaVersion === 1
+        ? `marketing/${receipt.campaignId}`
+        : `marketing/${projectId}/${receipt.campaignId}`;
     const expectedPrefix = `https://github.com/${this.#repository}/releases/`;
     if (
       receipt.channel !== 'github' ||
       !Number.isSafeInteger(releaseId) ||
       releaseId <= 0 ||
-      !/^marketing\/[a-z0-9][a-z0-9._-]{0,63}$/.test(tagName) ||
+      !/^marketing\/(?:[a-z0-9][a-z0-9-]{0,62}\/)?[a-z0-9][a-z0-9._-]{0,63}$/.test(tagName) ||
       !receipt.publicUrl.startsWith(expectedPrefix)
     ) {
       throw new AdapterError(
@@ -201,7 +208,13 @@ export class GitHubReleaseAdapter implements ChannelAdapter {
         release &&
         (release.id !== releaseId ||
           release.htmlUrl !== receipt.publicUrl ||
-          !release.body.includes(markerForValues(receipt.contentHash, receipt.idempotencyKey)))
+          !release.body.includes(
+            markerForValues(
+              receipt.contentHash,
+              receipt.idempotencyKey,
+              receipt.schemaVersion === 2 ? projectId : undefined,
+            ),
+          ))
       ) {
         throw new AdapterError(
           'IDEMPOTENCY_CONFLICT',

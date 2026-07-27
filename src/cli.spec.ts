@@ -14,4 +14,28 @@ describe('marketing-ops CLI UX', () => {
       expect(() => parseCliArgs(['setup', 'dev', unsafe, 'unsafe'])).toThrow(/not accepted/i);
     }
   });
+
+  it('TC-AUTO-CLI-133-01 project 命令与显式项目选择保持低摩擦且拒绝秘密参数', () => {
+    expect(parseCliArgs(['project', 'add'])).toEqual({ command: 'project-add' });
+    expect(parseCliArgs(['project', 'list'])).toEqual({ command: 'project-list' });
+    expect(parseCliArgs(['project', 'show', 'algorithm-visualizer'])).toEqual({
+      command: 'project-show',
+      projectId: 'algorithm-visualizer',
+    });
+    expect(parseCliArgs(['setup', 'github', '--project', 'algorithm-visualizer'])).toEqual({
+      command: 'setup',
+      channel: 'github',
+      projectId: 'algorithm-visualizer',
+    });
+    expect(parseCliArgs(['status', '--project', 'algorithm-visualizer'])).toEqual({
+      command: 'status',
+      projectId: 'algorithm-visualizer',
+    });
+    expect(parseCliArgs(['doctor', '--project', 'algorithm-visualizer'])).toEqual({
+      command: 'doctor',
+      projectId: 'algorithm-visualizer',
+    });
+    expect(() => parseCliArgs(['project', 'show', '../escape'])).toThrow(/project/i);
+    expect(() => parseCliArgs(['setup', 'github', '--repository', 'owner/repository'])).toThrow();
+  });
 });

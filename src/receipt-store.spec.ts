@@ -170,6 +170,7 @@ describe('marketing-ops receipt store', () => {
     const schemaCases: unknown[] = [
       null,
       { ...makeReceipt(), schemaVersion: 2 },
+      { ...makeReceipt(), schemaVersion: 2, projectId: '../escape' },
       { ...makeReceipt(), campaignId: '' },
       { ...makeReceipt(), channel: 'unknown' },
       { ...makeReceipt(), publicUrl: 'http://example.com' },
@@ -230,6 +231,36 @@ describe('marketing-ops receipt store', () => {
     await expect(entryStore.listByCampaign('empty')).rejects.toMatchObject({
       code: 'STORAGE_CORRUPTED',
     });
+  });
+
+  it('TC-AUTO-ISOLATION-133-02 项目 overload 缺参和精确引用均失败关闭', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'marketing-ops-receipt-'));
+    roots.push(root);
+    const store = new ReceiptStore(root);
+    const legacy = makeReceipt();
+    await store.save(legacy);
+    const postRef = {
+      channel: legacy.channel,
+      postId: legacy.postId,
+      publicUrl: legacy.publicUrl,
+    };
+
+    await expect(
+      store.findByPostRef('algorithm-visualizer', legacy.campaignId, postRef),
+    ).resolves.toEqual(legacy);
+    await expect(
+      (store.findKnownPostRef as unknown as (projectId: string) => Promise<unknown>)(
+        'algorithm-visualizer',
+      ),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+    await expect(
+      (
+        store.findByPostRef as unknown as (
+          projectId: string,
+          campaignId: string,
+        ) => Promise<unknown>
+      )('algorithm-visualizer', legacy.campaignId),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
   });
 
   it('TC-AUTO-GHSTORE-127-02 硬链接、超限文件和不可建目录均失败关闭', async () => {

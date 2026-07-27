@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AdapterTransportError } from './contract.js';
 import {
   MastodonApiClient,
@@ -8,6 +8,10 @@ import {
 
 const ACCESS_TOKEN = 'mastodon-access-token-abcdefghijklmnop';
 const INSTANCE_URL = 'https://mastodon.social';
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function jsonResponse(body: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(body), {
@@ -144,6 +148,27 @@ describe('Mastodon API client', () => {
         favouriteCount: 0,
       },
     });
+
+    const htmlOnly = new MastodonApiClient({
+      credentials: { instanceUrl: INSTANCE_URL, accessToken: ACCESS_TOKEN },
+      fetcher: async () =>
+        jsonResponse([
+          {
+            id: '200',
+            uri: 'https://mastodon.social/users/illegalcreed/statuses/200',
+            created_at: '2026-07-16T00:00:00.000Z',
+            url: 'https://mastodon.social/@illegalcreed/200',
+            content: '<p>Hello &amp; welcome<br>next &lt;step&gt;</p>',
+            account: { id: '109876', acct: 'illegalcreed@mastodon.social' },
+            replies_count: 0,
+            reblogs_count: 0,
+            favourites_count: 0,
+          },
+        ]),
+    });
+    await expect(
+      htmlOnly.findRecentStatusByText('Hello & welcome\nnext <step>', '109876'),
+    ).resolves.toMatchObject({ status: { text: 'Hello & welcome\nnext <step>' } });
   });
 
   it('TC-AUTO-MASTOAPI-127-05 创建状态使用 Idempotency-Key，语言与可见性显式透传', async () => {
@@ -246,6 +271,10 @@ describe('Mastodon API client', () => {
         bodyHtml: '<p>Hi</p>',
       },
     ]);
+    await expect(client.deleteStatus('201')).resolves.toEqual({ status: 'deleted' });
+    await expect(client.deleteStatus('invalid')).rejects.toMatchObject({
+      code: 'INVALID_INPUT',
+    });
   });
 
   it('TC-AUTO-MASTOAPI-127-07 传输错误映射超时与 retry-after', async () => {
@@ -267,5 +296,29 @@ describe('Mastodon API client', () => {
       status: 429,
       retryAfterSeconds: 9,
     });
+
+    const malformed = new MastodonApiClient({
+      credentials: { instanceUrl: INSTANCE_URL, accessToken: ACCESS_TOKEN },
+      fetcher: async () => jsonResponse({ id: 'broken' }),
+    });
+    await expect(malformed.getStatus('201')).rejects.toBeInstanceOf(AdapterTransportError);
+
+    const defaultFetch = vi.fn(async () =>
+      jsonResponse({
+        id: '109876',
+        acct: 'owner@example.social',
+        url: 'https://example.social/@owner',
+      }),
+    );
+    vi.stubGlobal('fetch', defaultFetch);
+    await expect(
+      new MastodonApiClient({
+        credentials: {
+          instanceUrl: 'https://example.social',
+          accessToken: ACCESS_TOKEN,
+        },
+      }).checkHealth(),
+    ).resolves.toMatchObject({ health: 'ready', alias: 'owner@example.social' });
+    expect(defaultFetch).toHaveBeenCalledOnce();
   });
 });

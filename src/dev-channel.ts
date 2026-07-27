@@ -1,6 +1,10 @@
 import type { DevActivation, DevActivationStore } from './dev-activation-store.js';
 import { normalizeDevApiKey, type DevApiHealth } from './adapters/dev-api.js';
-import { DevArticleAdapter, type DevArticleClient } from './adapters/dev-article.js';
+import {
+  DevArticleAdapter,
+  type DevArticleClient,
+  type DevArticleProjectPolicy,
+} from './adapters/dev-article.js';
 import type { DevObservabilityClient } from './dev-observability.js';
 import { MarketingOpsError } from './errors.js';
 import type { AdapterRegistration } from './publish-service.js';
@@ -81,11 +85,11 @@ export class DevChannelController {
     return publicStatus(health.alias, 'ready', true);
   }
 
-  async createRegistration(): Promise<AdapterRegistration | null> {
+  async createRegistration(project: DevArticleProjectPolicy): Promise<AdapterRegistration | null> {
     const resolved = await this.#resolve();
     if (!resolved.client || !resolved.status.adapterReady) return null;
     return {
-      adapter: new DevArticleAdapter({ client: resolved.client }),
+      adapter: new DevArticleAdapter({ client: resolved.client, ...project }),
       enabled: true,
       health: 'ready',
     };

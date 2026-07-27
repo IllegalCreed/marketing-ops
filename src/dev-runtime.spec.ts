@@ -4,9 +4,25 @@ import type { DevObservabilityClient } from './dev-observability.js';
 import { createLocalRuntimeToolHandler } from './local-runtime.js';
 import type { AdapterRegistration, ReceiptRepository } from './publish-service.js';
 import type { PublishReceipt } from './receipt-store.js';
+import { receiptProjectId } from './receipt-store.js';
+import type { ProjectProfile } from './project-profile-store.js';
 import { createDevPublishRequest } from './test-fixtures.js';
 
 const PUBLIC_URL = 'https://dev.to/algorithmviz/quick-sort-visualized-1234';
+const PROJECT_ID = 'algorithm-visualizer';
+const PROJECT_PROFILE: ProjectProfile = {
+  schemaVersion: 1,
+  id: PROJECT_ID,
+  displayName: 'Algorithm Visualizer',
+  canonicalOrigins: ['https://algo.illegalscreed.cn'],
+  channels: ['github', 'dev'],
+  github: { repository: 'IllegalCreed/algorithms-visualization' },
+  dev: { tags: ['algorithms', 'webdev', 'opensource'] },
+};
+
+function projects() {
+  return { require: vi.fn(async () => PROJECT_PROFILE) };
+}
 
 class MemoryReceipts implements ReceiptRepository {
   readonly values = new Map<string, PublishReceipt>();
@@ -20,14 +36,20 @@ class MemoryReceipts implements ReceiptRepository {
     return { receipt, reused: false };
   }
 
-  async listByCampaign(campaignId: string) {
-    return [...this.values.values()].filter((receipt) => receipt.campaignId === campaignId);
+  async listByCampaign(projectId: string, campaignId: string) {
+    return [...this.values.values()].filter(
+      (receipt) => receiptProjectId(receipt) === projectId && receipt.campaignId === campaignId,
+    );
   }
 
-  async findKnownPostRef(postRef: { channel: string; postId: string; publicUrl: string }) {
+  async findKnownPostRef(
+    projectId: string,
+    postRef: { channel: string; postId: string; publicUrl: string },
+  ) {
     return (
       [...this.values.values()].find(
         (receipt) =>
+          receiptProjectId(receipt) === projectId &&
           receipt.channel === postRef.channel &&
           receipt.postId === postRef.postId &&
           receipt.publicUrl === postRef.publicUrl,
@@ -36,16 +58,17 @@ class MemoryReceipts implements ReceiptRepository {
   }
 
   async findByPostRef(
+    projectId: string,
     campaignId: string,
     postRef: { channel: string; postId: string; publicUrl: string },
   ) {
-    const receipt = await this.findKnownPostRef(postRef);
+    const receipt = await this.findKnownPostRef(projectId, postRef);
     return receipt?.campaignId === campaignId ? receipt : null;
   }
 
-  async markDeleted(key: string) {
+  async markDeleted(projectId: string, key: string) {
     const receipt = this.values.get(key);
-    if (!receipt) throw new Error('not found');
+    if (!receipt || receiptProjectId(receipt) !== projectId) throw new Error('not found');
     const deleted = { ...receipt, status: 'deleted' as const };
     this.values.set(key, deleted);
     return deleted;
@@ -71,7 +94,8 @@ function devAdapter(): ChannelAdapter {
     publish: vi.fn<ChannelAdapter['publish']>(async (input) => ({
       reused: false,
       receipt: {
-        schemaVersion: 1,
+        schemaVersion: 2,
+        projectId: input.projectId,
         campaignId: input.campaignId,
         channel: 'dev',
         postId: '321',
@@ -149,12 +173,13 @@ describe('local DEV runtime wiring', () => {
   it('TC-AUTO-DEVRUNTIME-127-01 status 动态且只为 DEV package 惰性注册', async () => {
     const controller = dev();
     const handler = createLocalRuntimeToolHandler({
-      github: github(),
+      projects: projects(),
+      github: () => github(),
       dev: controller,
       receipts: new MemoryReceipts(),
     });
 
-    await expect(handler('channels_status', {})).resolves.toMatchObject({
+    await expect(handler('channels_status', { projectId: PROJECT_ID })).resolves.toMatchObject({
       data: {
         channels: expect.arrayContaining([
           expect.objectContaining({
@@ -176,7 +201,12 @@ describe('local DEV runtime wiring', () => {
   it('TC-AUTO-DEVRUNTIME-127-02 feedback/report 只读取已知已发布 receipt', async () => {
     const controller = dev();
     const receipts = new MemoryReceipts();
-    const handler = createLocalRuntimeToolHandler({ github: github(), dev: controller, receipts });
+    const handler = createLocalRuntimeToolHandler({
+      projects: projects(),
+      github: () => github(),
+      dev: controller,
+      receipts,
+    });
     const published = await handler('publish_campaign', createDevPublishRequest());
     const receipt = (published.data as { receipts: PublishReceipt[] }).receipts[0]!;
     const postRef = {
@@ -185,11 +215,17 @@ describe('local DEV runtime wiring', () => {
       publicUrl: receipt.publicUrl,
     };
 
-    await expect(handler('list_feedback', { postRef })).resolves.toMatchObject({
+    await expect(
+      handler('list_feedback', { projectId: PROJECT_ID, postRef }),
+    ).resolves.toMatchObject({
       data: { items: [{ kind: 'comment', untrusted: true }], nextCursor: null },
     });
     await expect(
-      handler('get_campaign_report', { campaignId: receipt.campaignId, window: '48h' }),
+      handler('get_campaign_report', {
+        projectId: PROJECT_ID,
+        campaignId: receipt.campaignId,
+        window: '48h',
+      }),
     ).resolves.toMatchObject({
       data: {
         status: 'available',
@@ -200,6 +236,7 @@ describe('local DEV runtime wiring', () => {
 
     await expect(
       handler('list_feedback', {
+        projectId: PROJECT_ID,
         postRef: { ...postRef, postId: '999' },
       }),
     ).resolves.toMatchObject({ isError: true, data: { code: 'INVALID_INPUT' } });
@@ -208,7 +245,12 @@ describe('local DEV runtime wiring', () => {
   it('TC-AUTO-DEVRUNTIME-127-03 reply/delete 与失去健康状态均失败关闭', async () => {
     const controller = dev();
     const receipts = new MemoryReceipts();
-    const handler = createLocalRuntimeToolHandler({ github: github(), dev: controller, receipts });
+    const handler = createLocalRuntimeToolHandler({
+      projects: projects(),
+      github: () => github(),
+      dev: controller,
+      receipts,
+    });
     const published = await handler('publish_campaign', createDevPublishRequest());
     const receipt = (published.data as { receipts: PublishReceipt[] }).receipts[0]!;
     const postRef = {
@@ -223,6 +265,7 @@ describe('local DEV runtime wiring', () => {
 
     await expect(
       handler('delete_post', {
+        projectId: PROJECT_ID,
         campaignId: receipt.campaignId,
         postRef,
         idempotencyKey: 'delete/quick-sort-launch/dev-0001',
@@ -231,6 +274,7 @@ describe('local DEV runtime wiring', () => {
     ).resolves.toMatchObject({ isError: true, data: { code: 'ADAPTER_UNAVAILABLE' } });
     await expect(
       handler('reply_feedback', {
+        projectId: PROJECT_ID,
         campaignId: receipt.campaignId,
         postRef,
         commentId: 'comment1',
@@ -242,22 +286,35 @@ describe('local DEV runtime wiring', () => {
     ).resolves.toMatchObject({ isError: true, data: { code: 'ADAPTER_UNAVAILABLE' } });
 
     const disabled = createLocalRuntimeToolHandler({
-      github: github(),
+      projects: projects(),
+      github: () => github(),
       dev: dev(false),
       receipts,
     });
-    await expect(disabled('list_feedback', { postRef })).resolves.toMatchObject({
+    await expect(
+      disabled('list_feedback', { projectId: PROJECT_ID, postRef }),
+    ).resolves.toMatchObject({
       isError: true,
       data: { code: 'ADAPTER_UNAVAILABLE' },
     });
 
-    const withoutDev = createLocalRuntimeToolHandler({ github: github(), receipts });
-    await expect(withoutDev('list_feedback', { postRef })).resolves.toMatchObject({
+    const withoutDev = createLocalRuntimeToolHandler({
+      projects: projects(),
+      github: () => github(),
+      receipts,
+    });
+    await expect(
+      withoutDev('list_feedback', { projectId: PROJECT_ID, postRef }),
+    ).resolves.toMatchObject({
       isError: true,
       data: { code: 'ADAPTER_UNAVAILABLE' },
     });
     await expect(
-      withoutDev('get_campaign_report', { campaignId: receipt.campaignId, window: '1h' }),
+      withoutDev('get_campaign_report', {
+        projectId: PROJECT_ID,
+        campaignId: receipt.campaignId,
+        window: '1h',
+      }),
     ).resolves.toMatchObject({ isError: true, data: { code: 'ADAPTER_UNAVAILABLE' } });
   });
 
@@ -265,11 +322,12 @@ describe('local DEV runtime wiring', () => {
     const controller = dev();
     controller.getStatus.mockRejectedValueOnce(new Error('private dev-api-key-abcdefghijklmnop'));
     const handler = createLocalRuntimeToolHandler({
-      github: github(),
+      projects: projects(),
+      github: () => github(),
       dev: controller,
       receipts: new MemoryReceipts(),
     });
-    const status = await handler('channels_status', {});
+    const status = await handler('channels_status', { projectId: PROJECT_ID });
 
     expect(status).toMatchObject({
       data: {

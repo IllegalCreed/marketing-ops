@@ -12,6 +12,10 @@ import {
 
 const API_KEY = 'dev-api-key-abcdefghijklmnop';
 const roots: string[] = [];
+const PROJECT_POLICY = {
+  canonicalOrigins: ['https://algo.illegalscreed.cn'],
+  tags: ['algorithms', 'webdev', 'opensource'],
+};
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -85,7 +89,7 @@ describe('DEV channel controller', () => {
       adapterReady: false,
       nextAction: 'Run marketing-ops setup dev',
     });
-    await expect(controller.createRegistration()).resolves.toBeNull();
+    await expect(controller.createRegistration(PROJECT_POLICY)).resolves.toBeNull();
     expect(keychain.store.get).not.toHaveBeenCalled();
     expect(controllerOptions.clients).not.toHaveBeenCalled();
   });
@@ -105,10 +109,10 @@ describe('DEV channel controller', () => {
     });
     expect(controllerOptions.clients).toHaveBeenCalledWith(API_KEY);
     expect(keychain.values.get(DEV_API_KEY_REF)).toBe(API_KEY);
-    await expect(controller.createRegistration()).resolves.toMatchObject({
+    await expect(controller.createRegistration(PROJECT_POLICY)).resolves.toMatchObject({
       enabled: true,
       health: 'ready',
-      adapter: { definition: { channel: 'dev', version: 'dev-article@0.1.0' } },
+      adapter: { definition: { channel: 'dev', version: 'dev-article@0.2.0' } },
     });
     await expect(controller.createEnabledClient()).resolves.toBeTruthy();
   });
@@ -136,7 +140,7 @@ describe('DEV channel controller', () => {
       health: 'reauth-required',
       adapterReady: false,
     });
-    await expect(controller.createRegistration()).resolves.toBeNull();
+    await expect(controller.createRegistration(PROJECT_POLICY)).resolves.toBeNull();
   });
 
   it('TC-AUTO-DEVCHANNEL-127-05 activation 与实时身份不一致时失败关闭', async () => {

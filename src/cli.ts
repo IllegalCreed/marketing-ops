@@ -18,7 +18,9 @@ import {
   createDefaultGitHubController,
   createDefaultMastodonController,
   createDefaultWeiboController,
+  marketingOpsDataRoot,
 } from './local-runtime.js';
+import { ProjectProfileStore, type ProjectProfile } from './project-profile-store.js';
 import { MacOsKeychainSecretStore } from './security/secret-store.js';
 
 const KEYCHAIN_HELPER = join(dirname(fileURLToPath(import.meta.url)), 'keychain-helper');
@@ -85,9 +87,86 @@ async function chooseChannel(): Promise<AutomaticChannel> {
   return channel;
 }
 
-async function runSetup(channelInput?: AutomaticChannel): Promise<void> {
+function projectStore(): ProjectProfileStore {
+  return new ProjectProfileStore(marketingOpsDataRoot());
+}
+
+async function resolveProject(projectId?: string): Promise<ProjectProfile> {
+  const store = projectStore();
+  if (projectId) return store.require(projectId);
+  const projects = await store.list();
+  if (projects.length === 1) return projects[0]!;
+  throw new MarketingOpsError(
+    'INVALID_INPUT',
+    projects.length === 0
+      ? 'Register a project with marketing-ops project add'
+      : 'Select a project with --project <project-id>',
+  );
+}
+
+function commaSeparated(value: string): string[] {
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+async function runProjectAdd(): Promise<void> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new MarketingOpsError('INVALID_INPUT', 'A secure interactive TTY is required');
+  }
+  const id = await promptVisible('Project ID (lowercase-kebab-case): ');
+  const displayName = await promptVisible('Project display name: ');
+  const canonicalOrigins = commaSeparated(await promptVisible('HTTPS origins (comma separated): '));
+  const channels = commaSeparated(await promptVisible('Enabled channels (comma separated): '));
+  const github = channels.includes('github')
+    ? { repository: await promptVisible('GitHub repository (owner/name): ') }
+    : undefined;
+  const dev = channels.includes('dev')
+    ? { tags: commaSeparated(await promptVisible('DEV tags (1-4, comma separated): ')) }
+    : undefined;
+  const profile = await projectStore().save({
+    schemaVersion: 1,
+    id,
+    displayName,
+    canonicalOrigins,
+    channels,
+    ...(github ? { github } : {}),
+    ...(dev ? { dev } : {}),
+  });
+  process.stdout.write(`Project ${profile.id} is registered and ready for local campaigns.\n`);
+}
+
+async function renderProjects(): Promise<string> {
+  const projects = await projectStore().list();
+  if (projects.length === 0) return 'No projects are registered.';
+  return projects
+    .map(
+      (project) =>
+        `${project.id.padEnd(24)} ${project.displayName}  ${project.canonicalOrigins.join(', ')}`,
+    )
+    .join('\n');
+}
+
+async function renderProject(projectId: string): Promise<string> {
+  const project = await projectStore().require(projectId);
+  return [
+    `Project: ${project.id}`,
+    `Name: ${project.displayName}`,
+    `Origins: ${project.canonicalOrigins.join(', ')}`,
+    `Channels: ${project.channels.join(', ')}`,
+    `GitHub: ${project.github?.repository ?? 'disabled'}`,
+    `DEV tags: ${project.dev?.tags.join(', ') ?? 'disabled'}`,
+  ].join('\n');
+}
+
+async function runSetup(channelInput?: AutomaticChannel, projectId?: string): Promise<void> {
   assertSecureSetupInvocation(
-    ['setup', ...(channelInput ? [channelInput] : [])],
+    [
+      'setup',
+      ...(channelInput ? [channelInput] : []),
+      ...(projectId ? ['--project', projectId] : []),
+    ],
     relevantEnvironment(),
     Boolean(process.stdin.isTTY),
   );
@@ -96,12 +175,14 @@ async function runSetup(channelInput?: AutomaticChannel): Promise<void> {
   process.stdout.write(`Setting up ${plan.label} with ${plan.method}.\n`);
 
   if (channel === 'github') {
-    const status = await createDefaultGitHubController().enable();
+    const project = await resolveProject(projectId);
+    const status = await createDefaultGitHubController(project).enable();
     process.stdout.write(
       `GitHub ${status.alias ?? 'account'} is ready. The adapter is enabled for owner-authorized campaigns.\n`,
     );
     return;
   }
+  if (projectId) await projectStore().require(projectId);
   if (channel === 'bluesky') {
     const handle = await promptVisible('Public account handle: ');
     const appPassword = await promptHidden('Dedicated App Password: ');
@@ -145,55 +226,93 @@ async function runSetup(channelInput?: AutomaticChannel): Promise<void> {
   );
 }
 
-async function renderStatuses(): Promise<string> {
+async function renderStatuses(projectId?: string): Promise<string> {
+  const project = await resolveProject(projectId);
   const [github, weibo, bluesky, dev, mastodon] = await Promise.all([
-    createDefaultGitHubController().getStatus(),
-    createDefaultWeiboController().getStatus(),
-    createDefaultBlueskyController().getStatus(),
-    createDefaultDevController().getStatus(),
-    createDefaultMastodonController().getStatus(),
+    project.channels.includes('github')
+      ? createDefaultGitHubController(project).getStatus()
+      : Promise.resolve({
+          channel: 'github' as const,
+          alias: null,
+          health: 'blocked' as const,
+          adapterReady: false,
+          nextAction: 'Enable GitHub in the project profile',
+        }),
+    project.channels.includes('weibo')
+      ? createDefaultWeiboController().getStatus()
+      : Promise.resolve(null),
+    project.channels.includes('bluesky')
+      ? createDefaultBlueskyController().getStatus()
+      : Promise.resolve(null),
+    project.channels.includes('dev')
+      ? createDefaultDevController().getStatus()
+      : Promise.resolve(null),
+    project.channels.includes('mastodon')
+      ? createDefaultMastodonController().getStatus()
+      : Promise.resolve(null),
   ]);
-  return CHANNEL_SETUP_CATALOG.map((channel) => {
-    if (channel.id === 'github') {
-      const readiness = github.adapterReady ? 'enabled' : 'setup-required';
-      return `${channel.label.padEnd(14)} ${github.health.padEnd(15)} ${readiness}`;
-    }
-    if (channel.id === 'weibo') {
-      return `${channel.label.padEnd(14)} ${weibo.health.padEnd(15)} ${weibo.nextAction}`;
-    }
-    if (channel.id === 'bluesky') {
-      const readiness = bluesky.adapterReady ? 'enabled' : 'setup-required';
-      return `${channel.label.padEnd(14)} ${bluesky.health.padEnd(15)} ${readiness}`;
-    }
-    if (channel.id === 'dev') {
-      const readiness = dev.adapterReady ? 'enabled' : 'setup-required';
-      return `${channel.label.padEnd(14)} ${dev.health.padEnd(15)} ${readiness}`;
-    }
-    if (channel.id === 'mastodon') {
-      const readiness = mastodon.adapterReady ? 'enabled' : 'setup-required';
-      return `${channel.label.padEnd(14)} ${mastodon.health.padEnd(15)} ${readiness}`;
-    }
-    const fallback = channel as { label: string; id: string };
-    return `${fallback.label.padEnd(14)} not-configured  Run marketing-ops setup ${fallback.id}`;
-  }).join('\n');
+  return [
+    `Project ${project.id}`,
+    ...CHANNEL_SETUP_CATALOG.map((channel) => {
+      if (!project.channels.includes(channel.id)) {
+        return `${channel.label.padEnd(14)} disabled        Enable in project profile`;
+      }
+      if (channel.id === 'github') {
+        const readiness = github.adapterReady ? 'enabled' : 'setup-required';
+        return `${channel.label.padEnd(14)} ${github.health.padEnd(15)} ${readiness}`;
+      }
+      if (channel.id === 'weibo') {
+        return `${channel.label.padEnd(14)} ${weibo!.health.padEnd(15)} ${weibo!.nextAction}`;
+      }
+      if (channel.id === 'bluesky') {
+        const readiness = bluesky!.adapterReady ? 'enabled' : 'setup-required';
+        return `${channel.label.padEnd(14)} ${bluesky!.health.padEnd(15)} ${readiness}`;
+      }
+      if (channel.id === 'dev') {
+        const readiness = dev!.adapterReady ? 'enabled' : 'setup-required';
+        return `${channel.label.padEnd(14)} ${dev!.health.padEnd(15)} ${readiness}`;
+      }
+      if (channel.id === 'mastodon') {
+        const readiness = mastodon!.adapterReady ? 'enabled' : 'setup-required';
+        return `${channel.label.padEnd(14)} ${mastodon!.health.padEnd(15)} ${readiness}`;
+      }
+      const fallback = channel as { label: string; id: string };
+      return `${fallback.label.padEnd(14)} not-configured  Run marketing-ops setup ${fallback.id}`;
+    }),
+  ].join('\n');
 }
 
 async function main() {
   const options = parseCliArgs(process.argv.slice(2));
   if (options.command === 'help') process.stdout.write(`${renderCliHelp()}\n`);
-  else if (options.command === 'setup') await runSetup(options.channel);
-  else if (options.command === 'status') process.stdout.write(`${await renderStatuses()}\n`);
-  else {
+  else if (options.command === 'project-add') await runProjectAdd();
+  else if (options.command === 'project-list') process.stdout.write(`${await renderProjects()}\n`);
+  else if (options.command === 'project-show') {
+    process.stdout.write(`${await renderProject(options.projectId)}\n`);
+  } else if (options.command === 'setup') {
+    await runSetup(options.channel, options.projectId);
+  } else if (options.command === 'status') {
+    process.stdout.write(`${await renderStatuses(options.projectId)}\n`);
+  } else {
     await access(KEYCHAIN_HELPER);
+    const project = await resolveProject(options.projectId);
     const [github, weibo, bluesky, dev, mastodon] = await Promise.all([
-      createDefaultGitHubController().getStatus(),
+      project.channels.includes('github')
+        ? createDefaultGitHubController(project).getStatus()
+        : Promise.resolve({
+            channel: 'github' as const,
+            alias: null,
+            health: 'blocked' as const,
+            adapterReady: false,
+            nextAction: 'Enable GitHub in the project profile',
+          }),
       createDefaultWeiboController().getStatus(),
       createDefaultBlueskyController().getStatus(),
       createDefaultDevController().getStatus(),
       createDefaultMastodonController().getStatus(),
     ]);
     process.stdout.write(
-      `Keychain helper: ready\nPrivate data root: ready\nMCP transport: stdio\nGitHub CLI: ${github.health}\nGitHub adapter: ${github.adapterReady ? 'enabled' : 'disabled'}\nWeibo CLI: ${weibo.health}\nWeibo adapter: disabled\nBluesky API: ${bluesky.health}\nBluesky adapter: ${bluesky.adapterReady ? 'enabled' : 'disabled'}\nDEV API: ${dev.health}\nDEV adapter: ${dev.adapterReady ? 'enabled' : 'disabled'}\nMastodon API: ${mastodon.health}\nMastodon adapter: ${mastodon.adapterReady ? 'enabled' : 'disabled'}\n`,
+      `Project: ${project.id}\nKeychain helper: ready\nPrivate data root: ready\nMCP transport: stdio\nGitHub CLI: ${github.health}\nGitHub adapter: ${github.adapterReady ? 'enabled' : 'disabled'}\nWeibo CLI: ${weibo.health}\nWeibo adapter: disabled\nBluesky API: ${bluesky.health}\nBluesky adapter: ${bluesky.adapterReady ? 'enabled' : 'disabled'}\nDEV API: ${dev.health}\nDEV adapter: ${dev.adapterReady ? 'enabled' : 'disabled'}\nMastodon API: ${mastodon.health}\nMastodon adapter: ${mastodon.adapterReady ? 'enabled' : 'disabled'}\n`,
     );
   }
 }

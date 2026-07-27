@@ -17,7 +17,7 @@ export interface DevArticleDraft {
   bodyMarkdown: string;
   canonicalUrl: string;
   published: true;
-  tags: 'algorithms, webdev, opensource';
+  tags: string;
 }
 
 export interface DevArticleRecord {
@@ -44,7 +44,7 @@ export interface DevArticleClient {
 
 const DEFINITION = defineAdapter({
   channel: 'dev',
-  version: 'dev-article@0.1.0',
+  version: 'dev-article@0.2.0',
   capabilities: {
     publish: true,
     status: true,
@@ -55,7 +55,6 @@ const DEFINITION = defineAdapter({
   },
 });
 
-const projectOrigin = 'https://algo.illegalscreed.cn';
 const devArticleUrlPattern =
   /^https:\/\/dev\.to\/[a-z0-9][a-z0-9_-]{1,63}\/[a-z0-9][a-z0-9-]{0,255}$/;
 const recordSchema = z
@@ -63,7 +62,7 @@ const recordSchema = z
     id: z.number().int().positive().safe(),
     title: z.string().min(1).max(128),
     bodyMarkdown: z.string().min(1).max(100_000),
-    canonicalUrl: z.url().startsWith(`${projectOrigin}/`),
+    canonicalUrl: z.url().startsWith('https://'),
     publicUrl: z.string().regex(devArticleUrlPattern),
     publishedAt: z.iso.datetime({ offset: true }),
     commentsCount: z.number().int().nonnegative().safe(),
@@ -74,7 +73,7 @@ const recordSchema = z
 
 function marker(input: AdapterPublishInput): string {
   const idempotencyHash = createHash('sha256').update(input.idempotencyKey).digest('hex');
-  return `<!-- marketing-ops:v1 content-sha256=${input.contentHash} idempotency-sha256=${idempotencyHash} -->`;
+  return `<!-- marketing-ops:v2 project=${input.projectId} content-sha256=${input.contentHash} idempotency-sha256=${idempotencyHash} -->`;
 }
 
 function canonicalFromTrackedLink(value: string): string {
@@ -85,7 +84,52 @@ function canonicalFromTrackedLink(value: string): string {
   return url.toString();
 }
 
-function parseInput(value: unknown): AdapterPublishInput {
+export interface DevArticleProjectPolicy {
+  canonicalOrigins: readonly string[];
+  tags: readonly string[];
+}
+
+function parsePolicy(value: DevArticleProjectPolicy): {
+  canonicalOrigins: string[];
+  tags: string[];
+} {
+  const canonicalOrigins = [...new Set(value.canonicalOrigins)].sort();
+  const tags = [...new Set(value.tags)].sort();
+  if (
+    canonicalOrigins.length === 0 ||
+    canonicalOrigins.some((origin) => {
+      try {
+        const url = new URL(origin);
+        return (
+          url.protocol !== 'https:' ||
+          url.username !== '' ||
+          url.password !== '' ||
+          url.pathname !== '/' ||
+          url.search !== '' ||
+          url.hash !== '' ||
+          url.origin !== origin
+        );
+      } catch {
+        return true;
+      }
+    }) ||
+    tags.length === 0 ||
+    tags.length > 4 ||
+    tags.some((tag) => !/^[a-z0-9][a-z0-9-]{0,29}$/.test(tag))
+  ) {
+    throw new AdapterError('INVALID_CONTENT', 'DEV project policy is invalid', {
+      retryable: false,
+    });
+  }
+  return { canonicalOrigins, tags };
+}
+
+function hasAllowedOrigin(value: string, canonicalOrigins: readonly string[]): boolean {
+  return canonicalOrigins.includes(new URL(value).origin);
+}
+
+function parseInput(value: unknown, policyInput: DevArticleProjectPolicy): AdapterPublishInput {
+  const policy = parsePolicy(policyInput);
   const input = parseAdapterPublishInput(value, {
     channel: 'dev',
     format: 'article',
@@ -98,13 +142,14 @@ function parseInput(value: unknown): AdapterPublishInput {
   }
   const canonicalUrl = input.package.canonicalUrl;
   const variant = input.package.variants[0];
-  if (!canonicalUrl || new URL(canonicalUrl).origin !== projectOrigin) {
+  if (!canonicalUrl || !hasAllowedOrigin(canonicalUrl, policy.canonicalOrigins)) {
     throw new AdapterError('INVALID_CONTENT', 'DEV canonical URL must use the project origin', {
       retryable: false,
     });
   }
   if (
     variant.links.length === 0 ||
+    variant.links.some((link) => !hasAllowedOrigin(link, policy.canonicalOrigins)) ||
     variant.links.some((link) => !variant.body.includes(link)) ||
     canonicalFromTrackedLink(variant.links[0]!) !== canonicalUrl
   ) {
@@ -115,21 +160,31 @@ function parseInput(value: unknown): AdapterPublishInput {
   return input;
 }
 
-export function buildDevArticleDraft(value: unknown): DevArticleDraft {
-  const input = parseInput(value);
+export function buildDevArticleDraft(
+  value: unknown,
+  policyInput: DevArticleProjectPolicy,
+): DevArticleDraft {
+  const policy = parsePolicy(policyInput);
+  const input = parseInput(value, policy);
   const variant = input.package.variants[0]!;
   return {
     title: variant.title,
     bodyMarkdown: `${marker(input)}\n\n${variant.body}`,
     canonicalUrl: input.package.canonicalUrl!,
     published: true,
-    tags: 'algorithms, webdev, opensource',
+    tags: policy.tags.join(', '),
   };
 }
 
-function parseRecord(value: unknown, stage: 'before-submit' | 'after-submit'): DevArticleRecord {
+function parseRecord(
+  value: unknown,
+  stage: 'before-submit' | 'after-submit',
+  canonicalOrigins: readonly string[],
+): DevArticleRecord {
   const parsed = recordSchema.safeParse(value);
-  if (parsed.success) return parsed.data;
+  if (parsed.success && hasAllowedOrigin(parsed.data.canonicalUrl, canonicalOrigins)) {
+    return parsed.data;
+  }
   if (stage === 'after-submit') {
     throw new AdapterError(
       'UNKNOWN_RESULT',
@@ -176,20 +231,22 @@ export class DevArticleAdapter implements ChannelAdapter {
   readonly definition = DEFINITION;
   readonly expectedFormat = 'article' as const;
   readonly #client: DevArticleClient;
+  readonly #policy: { canonicalOrigins: string[]; tags: string[] };
 
-  constructor(options: { client: DevArticleClient }) {
+  constructor(options: { client: DevArticleClient } & DevArticleProjectPolicy) {
     this.#client = options.client;
+    this.#policy = parsePolicy(options);
   }
 
   async preflight(value: AdapterPublishInput): Promise<void> {
     requireAdapterCapability(this.definition, 'publish');
-    buildDevArticleDraft(value);
+    buildDevArticleDraft(value, this.#policy);
   }
 
   async publish(value: AdapterPublishInput): Promise<AdapterPublishResult> {
     await this.preflight(value);
-    const input = parseInput(value);
-    const draft = buildDevArticleDraft(input);
+    const input = parseInput(value, this.#policy);
+    const draft = buildDevArticleDraft(input, this.#policy);
     let lookup: DevArticleLookup;
     try {
       lookup = await this.#client.findArticle(draft);
@@ -209,7 +266,7 @@ export class DevArticleAdapter implements ChannelAdapter {
       });
     }
     if (lookup.article) {
-      const existing = parseRecord(lookup.article, 'before-submit');
+      const existing = parseRecord(lookup.article, 'before-submit', this.#policy.canonicalOrigins);
       assertArticleMatches(existing, draft, 'before-submit');
       return {
         reused: true,
@@ -227,7 +284,7 @@ export class DevArticleAdapter implements ChannelAdapter {
     } catch (error) {
       throw mapAdapterTransportError(error);
     }
-    const created = parseRecord(createdValue, 'after-submit');
+    const created = parseRecord(createdValue, 'after-submit', this.#policy.canonicalOrigins);
     assertArticleMatches(created, draft, 'after-submit');
     return {
       reused: false,

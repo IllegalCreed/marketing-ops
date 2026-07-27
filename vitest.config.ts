@@ -31,6 +31,18 @@ export default defineConfig({
           functions: 100,
           statements: 95,
         },
+        'src/project-profile-store.ts': {
+          lines: 100,
+          branches: 100,
+          functions: 100,
+          statements: 100,
+        },
+        'src/project-policy.ts': {
+          lines: 100,
+          branches: 100,
+          functions: 100,
+          statements: 100,
+        },
         'src/activation-store.ts': {
           lines: 100,
           branches: 100,
@@ -98,10 +110,10 @@ export default defineConfig({
           statements: 95,
         },
         'src/receipt-store.ts': {
-          lines: 95,
-          branches: 90,
+          lines: 100,
+          branches: 100,
           functions: 100,
-          statements: 95,
+          statements: 100,
         },
         'src/runtime/gh-process.ts': {
           lines: 95,

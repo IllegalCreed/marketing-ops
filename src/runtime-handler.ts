@@ -1,4 +1,5 @@
 import { AdapterError } from './adapters/contract.js';
+import { MarketingOpsError } from './errors.js';
 import type { PublishService } from './publish-service.js';
 import { failClosedToolHandler, type MarketingToolHandler } from './server-factory.js';
 
@@ -14,7 +15,9 @@ export function createRuntimeToolHandler(publishRuntime: PublishRuntime): Market
         ...(result.receipts.length === 0 && result.failures.length > 0 ? { isError: true } : {}),
       };
     } catch (error) {
-      if (error instanceof AdapterError) return { data: error.toJSON(), isError: true };
+      if (error instanceof AdapterError || error instanceof MarketingOpsError) {
+        return { data: error.toJSON(), isError: true };
+      }
       return {
         data: {
           code: 'ADAPTER_UNAVAILABLE',

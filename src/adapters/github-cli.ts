@@ -13,7 +13,7 @@ import {
 } from '../runtime/gh-process.js';
 
 const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const TAG_PATTERN = /^marketing\/[a-z0-9][a-z0-9._-]{0,63}$/;
+const TAG_PATTERN = /^marketing\/(?:[a-z0-9][a-z0-9-]{0,62}\/)?[a-z0-9][a-z0-9._-]{0,63}$/;
 const RESPONSE_LIMIT_BYTES = 524_288;
 const TIMEOUT_MS = 20_000;
 const API_VERSION = '2026-03-10';

@@ -38,6 +38,7 @@ export interface AdapterDefinition {
 }
 
 export interface AdapterPublishInput {
+  projectId: string;
   campaignId: string;
   idempotencyKey: string;
   contentHash: string;
@@ -138,6 +139,7 @@ const definitionSchema = z
 
 const adapterPublishInputSchema = z
   .object({
+    projectId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
     campaignId: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/),
     idempotencyKey: z.string().regex(/^[a-z0-9][a-z0-9._/-]{7,255}$/),
     contentHash: z.string().regex(/^[a-f0-9]{64}$/),
@@ -226,7 +228,8 @@ export function createPublishedReceipt(
     });
   }
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    projectId: input.projectId,
     campaignId: input.campaignId,
     channel: input.package.channel,
     postId: reference.postId,

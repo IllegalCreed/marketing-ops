@@ -11,6 +11,7 @@ const REPOSITORY = 'IllegalCreed/algorithms-visualization';
 
 function input(overrides: Partial<GitHubIssueInput> = {}): GitHubIssueInput {
   return {
+    projectId: 'algorithm-visualizer',
     campaignId: 'quick-sort-launch',
     idempotencyKey: 'issue/quick-sort-launch/feedback-0001',
     title: 'Reset behavior feedback',
@@ -43,7 +44,7 @@ describe('GitHub Issue adapter', () => {
   it('TC-AUTO-GHISSUE-127-02..03 marker 确定且同内容远端复用', async () => {
     const draft = buildGitHubIssueDraft(input());
     expect(draft.body).toMatch(
-      /^<!-- marketing-ops-issue:v1 campaign=quick-sort-launch idempotency-sha256=[a-f0-9]{64} content-sha256=[a-f0-9]{64} -->/,
+      /^<!-- marketing-ops-issue:v2 project=algorithm-visualizer campaign=quick-sort-launch idempotency-sha256=[a-f0-9]{64} content-sha256=[a-f0-9]{64} -->/,
     );
     expect(draft.body).toContain('## Sources');
 
@@ -52,11 +53,13 @@ describe('GitHub Issue adapter', () => {
     await expect(adapter.create(input())).resolves.toMatchObject({
       issue: record(draft.body),
       receipt: {
+        schemaVersion: 2,
+        projectId: 'algorithm-visualizer',
         campaignId: 'quick-sort-launch',
         channel: 'github',
         postId: '12',
         publicUrl: expect.stringContaining('/issues/12'),
-        adapterVersion: 'github-issue@1.0.0',
+        adapterVersion: 'github-issue@1.1.0',
         status: 'published',
       },
       reused: true,

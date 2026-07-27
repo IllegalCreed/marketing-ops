@@ -6,10 +6,11 @@ import type { GitHubIssueDraft, GitHubIssueRecord } from './github-cli.js';
 
 const MAX_LOOKUP_PAGES = 10;
 const PAGE_SIZE = 100;
-const ADAPTER_VERSION = 'github-issue@1.0.0';
+const ADAPTER_VERSION = 'github-issue@1.1.0';
 
 const issueInputSchema = z
   .object({
+    projectId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
     campaignId: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/),
     idempotencyKey: z.string().regex(/^[a-z0-9][a-z0-9._/-]{7,255}$/),
     title: z.string().min(1).max(256),
@@ -39,7 +40,7 @@ function markerParts(input: GitHubIssueInput) {
   const contentHash = sha256(
     JSON.stringify({ title: input.title, body: input.body, sourceUrls: input.sourceUrls }),
   );
-  const prefix = `<!-- marketing-ops-issue:v1 campaign=${input.campaignId} idempotency-sha256=${idempotencyHash}`;
+  const prefix = `<!-- marketing-ops-issue:v2 project=${input.projectId} campaign=${input.campaignId} idempotency-sha256=${idempotencyHash}`;
   return {
     prefix,
     contentHash,
@@ -149,7 +150,8 @@ export class GitHubIssueAdapter {
     return {
       issue,
       receipt: {
-        schemaVersion: 1,
+        schemaVersion: 2,
+        projectId: input.projectId,
         campaignId: input.campaignId,
         channel: 'github',
         postId: String(issue.number),

@@ -28,6 +28,7 @@ function createPackage(media: Array<'image' | 'gif' | 'video'> = []) {
 
 function input() {
   return {
+    projectId: 'algorithm-visualizer',
     campaignId: 'quick-sort-launch',
     idempotencyKey: 'campaign-v2/quick-sort-launch/weibo-1234',
     contentHash: 'a'.repeat(64),

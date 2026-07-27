@@ -8,14 +8,16 @@ import {
 } from './adapters/github-release.js';
 import { createAdapterPublishInput, createGitHubPackage } from './test-fixtures.js';
 
-function createRecord(body: string): GitHubReleaseRecord {
+function createRecord(
+  body: string,
+  tagName = 'marketing/algorithm-visualizer/quick-sort-launch',
+): GitHubReleaseRecord {
   return {
     id: 123,
-    tagName: 'marketing/quick-sort-launch',
+    tagName,
     name: '快速排序可视化已上线 / Quick Sort visualization is live',
     body,
-    htmlUrl:
-      'https://github.com/IllegalCreed/algorithms-visualization/releases/tag/marketing%2Fquick-sort-launch',
+    htmlUrl: `https://github.com/IllegalCreed/algorithms-visualization/releases/tag/${encodeURIComponent(tagName)}`,
     publishedAt: '2026-07-11T00:00:00.000Z',
   };
 }
@@ -25,7 +27,7 @@ function createClient(record: GitHubReleaseRecord | null = null) {
     findReleaseByTag: vi.fn<GitHubReleaseClient['findReleaseByTag']>().mockResolvedValue(record),
     createRelease: vi
       .fn<GitHubReleaseClient['createRelease']>()
-      .mockImplementation(async (_repository, input) => createRecord(input.body)),
+      .mockImplementation(async (_repository, input) => createRecord(input.body, input.tagName)),
     deleteRelease: vi.fn<GitHubReleaseClient['deleteRelease']>().mockResolvedValue('deleted'),
     findTagReference: vi.fn(
       async () => null as { ref: string; sha: string; type: 'commit' | 'tag' } | null,
@@ -49,12 +51,14 @@ describe('GitHub Release adapter with typed fake client', () => {
 
     expect(first).toEqual(second);
     expect(first).toMatchObject({
-      tagName: 'marketing/quick-sort-launch',
+      tagName: 'marketing/algorithm-visualizer/quick-sort-launch',
       name: '快速排序可视化已上线 / Quick Sort visualization is live',
       draft: false,
       prerelease: false,
     });
-    expect(first.body).toMatch(/marketing-ops:v1.*content-sha256=[a-f0-9]{64}/);
+    expect(first.body).toMatch(
+      /marketing-ops:v2 project=algorithm-visualizer.*content-sha256=[a-f0-9]{64}/,
+    );
     expect(first.body).toContain('## 中文');
     expect(first.body).toContain('## English');
     expect(first.body).not.toContain(input.idempotencyKey);
@@ -99,13 +103,15 @@ describe('GitHub Release adapter with typed fake client', () => {
       receipt: {
         channel: 'github',
         postId: '123',
-        adapterVersion: 'github-release@1.2.0',
+        adapterVersion: 'github-release@1.3.0',
         status: 'published',
       },
     });
     expect(client.createRelease).toHaveBeenCalledWith(
       'IllegalCreed/algorithms-visualization',
-      expect.objectContaining({ tagName: 'marketing/quick-sort-launch' }),
+      expect.objectContaining({
+        tagName: 'marketing/algorithm-visualizer/quick-sort-launch',
+      }),
     );
     expect(client.createRelease.mock.calls[0]?.[1]).not.toHaveProperty('command');
     expect(client.createRelease.mock.calls[0]?.[1]).not.toHaveProperty('args');
@@ -114,7 +120,7 @@ describe('GitHub Release adapter with typed fake client', () => {
   it('TC-AUTO-GHSMOKE-127-01 不复用无法证明归属的既有 tag', async () => {
     const client = createClient();
     client.findTagReference.mockResolvedValueOnce({
-      ref: 'refs/tags/marketing/quick-sort-launch',
+      ref: 'refs/tags/marketing/algorithm-visualizer/quick-sort-launch',
       sha: 'a'.repeat(40),
       type: 'commit',
     });
@@ -191,7 +197,7 @@ describe('GitHub Release adapter with typed fake client', () => {
     expect(client.deleteTagReference).toHaveBeenNthCalledWith(
       1,
       'IllegalCreed/algorithms-visualization',
-      'marketing/quick-sort-launch',
+      'marketing/algorithm-visualizer/quick-sort-launch',
     );
 
     await expect(adapter.delete({ ...receipt, postId: 'not-a-number' })).rejects.toMatchObject({

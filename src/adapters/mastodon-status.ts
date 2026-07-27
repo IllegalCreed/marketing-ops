@@ -50,7 +50,7 @@ const recordSchema = z
   .strict();
 const deleteReceiptSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.union([z.literal(1), z.literal(2)]),
     channel: z.literal('mastodon'),
     postId: z.string().regex(/^[1-9]\d{0,63}$/),
     publicUrl: z.string().url(),

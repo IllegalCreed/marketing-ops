@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { AdapterError, type ChannelAdapter } from './adapters/contract.js';
 import {
@@ -5,16 +6,28 @@ import {
   type AdapterRegistration,
   type ReceiptRepository,
 } from './publish-service.js';
-import type { PublishReceipt } from './receipt-store.js';
+import type { ProjectPublishReceipt, PublishReceipt } from './receipt-store.js';
+import type { ProjectProfile } from './project-profile-store.js';
 import { createGitHubPackage, createPublishRequest, TEST_CONTENT_HASH } from './test-fixtures.js';
+
+const PROJECT_PROFILE: ProjectProfile = {
+  schemaVersion: 1,
+  id: 'algorithm-visualizer',
+  displayName: 'Algorithm Visualizer',
+  canonicalOrigins: ['https://algo.illegalscreed.cn'],
+  channels: ['github', 'dev'],
+  github: { repository: 'IllegalCreed/algorithms-visualization' },
+  dev: { tags: ['algorithms', 'webdev', 'opensource'] },
+};
 
 function receipt(
   channel: 'github' | 'dev',
   idempotencyKey: string,
   contentHash = TEST_CONTENT_HASH,
-): PublishReceipt {
+): ProjectPublishReceipt {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    projectId: 'algorithm-visualizer',
     campaignId: 'quick-sort-launch',
     channel,
     postId: `${channel}-1`,
@@ -107,6 +120,7 @@ describe('publish service dispatch boundary', () => {
   it('TC-AUTO-DISPATCH-127-01 只调用注册、启用且健康的精确 adapter', async () => {
     const github = fakeAdapter('github', 'release');
     const service = new PublishService({
+      profile: PROJECT_PROFILE,
       registrations: [registration(github)],
       receipts: new MemoryReceipts(),
     });
@@ -118,6 +132,7 @@ describe('publish service dispatch boundary', () => {
     expect(github.publish).toHaveBeenCalledOnce();
 
     const disabled = new PublishService({
+      profile: PROJECT_PROFILE,
       registrations: [registration(github, { enabled: false })],
       receipts: new MemoryReceipts(),
     });
@@ -129,6 +144,7 @@ describe('publish service dispatch boundary', () => {
     expect(
       () =>
         new PublishService({
+          profile: PROJECT_PROFILE,
           registrations: [registration(github), registration(github)],
           receipts: new MemoryReceipts(),
         }),
@@ -137,6 +153,7 @@ describe('publish service dispatch boundary', () => {
     vi.mocked(github.preflight).mockRejectedValueOnce(new Error('unexpected failure'));
     await expect(
       new PublishService({
+        profile: PROJECT_PROFILE,
         registrations: [registration(github)],
         receipts: new MemoryReceipts(),
       }).publish(createPublishRequest()),
@@ -153,6 +170,7 @@ describe('publish service dispatch boundary', () => {
       new AdapterError('INVALID_CONTENT', 'DEV preflight failed', { retryable: false }),
     );
     const service = new PublishService({
+      profile: PROJECT_PROFILE,
       registrations: [registration(github), registration(dev)],
       receipts: new MemoryReceipts(),
     });
@@ -179,6 +197,7 @@ describe('publish service dispatch boundary', () => {
       new AdapterError('TEMPORARY_FAILURE', 'GitHub failed', { retryable: true }),
     );
     const publishFailureService = new PublishService({
+      profile: PROJECT_PROFILE,
       registrations: [registration(failingGitHub), registration(untouchedDev)],
       receipts: new MemoryReceipts(),
     });
@@ -225,6 +244,7 @@ describe('publish service dispatch boundary', () => {
       return originalSave(value);
     };
     const service = new PublishService({
+      profile: PROJECT_PROFILE,
       registrations: [registration(github)],
       receipts,
     });
@@ -257,6 +277,7 @@ describe('publish service dispatch boundary', () => {
       reused: false,
     }));
     const invalidReceiptService = new PublishService({
+      profile: PROJECT_PROFILE,
       registrations: [registration(invalidReceiptAdapter)],
       receipts: new MemoryReceipts(),
     });
@@ -272,6 +293,7 @@ describe('publish service dispatch boundary', () => {
     });
     await expect(
       new PublishService({
+        profile: PROJECT_PROFILE,
         registrations: [registration(fakeAdapter('github', 'release'))],
         receipts: racedReceipts,
       }).publish(createPublishRequest()),
@@ -279,5 +301,37 @@ describe('publish service dispatch boundary', () => {
       receipts: [],
       failures: [{ channel: 'github', code: 'UNKNOWN_RESULT' }],
     });
+  });
+
+  it('TC-AUTO-ISOLATION-133-01 命中错项目 receipt 时拒绝复用且不调用 adapter', async () => {
+    const github = fakeAdapter('github', 'release');
+    const receipts = new MemoryReceipts();
+    const request = createPublishRequest();
+    const expectedKey = `campaign-v3/${request.projectId}/${request.campaignId}/github/${createHash(
+      'sha256',
+    )
+      .update(request.idempotencyKey)
+      .digest('hex')
+      .slice(0, 32)}`;
+    const packageContentHash = createHash('sha256')
+      .update(JSON.stringify(request.packages[0]))
+      .digest('hex');
+    receipts.values.set(expectedKey, {
+      ...receipt('github', expectedKey, packageContentHash),
+      projectId: 'different-project',
+    });
+
+    await expect(
+      new PublishService({
+        profile: PROJECT_PROFILE,
+        registrations: [registration(github)],
+        receipts,
+      }).publish(request),
+    ).resolves.toMatchObject({
+      receipts: [],
+      failures: [{ channel: 'github', code: 'UNKNOWN_RESULT' }],
+    });
+    expect(github.preflight).not.toHaveBeenCalled();
+    expect(github.publish).not.toHaveBeenCalled();
   });
 });

@@ -30,6 +30,7 @@ function createPackage(media: Array<'image' | 'gif' | 'video'> = []) {
 
 function input() {
   return {
+    projectId: 'algorithm-visualizer',
     campaignId: 'quick-sort-launch',
     idempotencyKey: 'campaign-v2/quick-sort-launch/bluesky-1234',
     contentHash: 'b'.repeat(64),
@@ -54,7 +55,8 @@ function record(text = postBody()): BlueskyPostRecord {
 function publishedReceipt(): PublishReceipt {
   const value = record();
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    projectId: 'algorithm-visualizer',
     campaignId: 'quick-sort-launch',
     channel: 'bluesky',
     postId: value.uri,

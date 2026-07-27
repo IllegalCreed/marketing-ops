@@ -37,9 +37,15 @@ describe('marketing-ops transport', () => {
       expect(client.getInstructions()?.slice(0, 512)).toMatch(/credentials.*never.*returned/i);
       expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(TOOL_NAMES);
 
-      const status = await client.callTool({ name: 'channels_status', arguments: {} });
+      const status = await client.callTool({
+        name: 'channels_status',
+        arguments: { projectId: 'algorithm-visualizer' },
+      });
       expect(status.isError).not.toBe(true);
-      expect(status.structuredContent).toMatchObject({ contractVersion: 2 });
+      expect(status.structuredContent).toMatchObject({
+        contractVersion: 3,
+        projectId: 'algorithm-visualizer',
+      });
 
       const authorization = {
         source: 'owner-prompt',
@@ -62,22 +68,33 @@ describe('marketing-ops transport', () => {
       await expect(
         client.callTool({
           name: 'get_publish_status',
-          arguments: { campaignId: 'quick-sort-launch' },
+          arguments: {
+            projectId: 'algorithm-visualizer',
+            campaignId: 'quick-sort-launch',
+          },
         }),
       ).resolves.toMatchObject({ structuredContent: { status: 'not-found' } });
       await expect(
         client.callTool({
           name: 'get_campaign_report',
-          arguments: { campaignId: 'quick-sort-launch', window: '1h' },
+          arguments: {
+            projectId: 'algorithm-visualizer',
+            campaignId: 'quick-sort-launch',
+            window: '1h',
+          },
         }),
       ).resolves.toMatchObject({ structuredContent: { status: 'unavailable' } });
       await expect(
-        client.callTool({ name: 'list_feedback', arguments: { postRef } }),
+        client.callTool({
+          name: 'list_feedback',
+          arguments: { projectId: 'algorithm-visualizer', postRef },
+        }),
       ).resolves.toMatchObject({ isError: true });
       await expect(
         client.callTool({
           name: 'reply_feedback',
           arguments: {
+            projectId: 'algorithm-visualizer',
             campaignId: 'quick-sort-launch',
             postRef,
             commentId: 'comment-1',
@@ -92,6 +109,7 @@ describe('marketing-ops transport', () => {
         client.callTool({
           name: 'delete_post',
           arguments: {
+            projectId: 'algorithm-visualizer',
             campaignId: 'quick-sort-launch',
             postRef,
             idempotencyKey: 'campaign-v1/quick-sort-launch/delete123',

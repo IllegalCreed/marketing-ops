@@ -1,20 +1,47 @@
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { ChannelAdapter } from './adapters/contract.js';
 import {
   createDefaultBlueskyClient,
   createDefaultDevClient,
-  createDefaultLocalRuntimeToolHandler,
+  createDefaultGitHubController,
   createLocalRuntimeToolHandler,
   createDefaultMastodonClient,
   marketingOpsDataRoot,
 } from './local-runtime.js';
 import type { AdapterRegistration, ReceiptRepository } from './publish-service.js';
 import type { PublishReceipt } from './receipt-store.js';
+import { receiptProjectId } from './receipt-store.js';
+import type { ProjectProfile } from './project-profile-store.js';
+import { ProjectProfileStore } from './project-profile-store.js';
 import {
   createBlueskyPublishRequest,
+  createDevPublishRequest,
   createMastodonPublishRequest,
   createPublishRequest,
 } from './test-fixtures.js';
+
+const PROJECT_ID = 'algorithm-visualizer';
+const PROJECT_PROFILE: ProjectProfile = {
+  schemaVersion: 1,
+  id: PROJECT_ID,
+  displayName: 'Algorithm Visualizer',
+  canonicalOrigins: ['https://algo.illegalscreed.cn'],
+  channels: ['github', 'weibo', 'bluesky', 'dev', 'mastodon'],
+  github: { repository: 'IllegalCreed/algorithms-visualization' },
+  dev: { tags: ['algorithms', 'webdev', 'opensource'] },
+};
+
+function projects(profile: ProjectProfile = PROJECT_PROFILE) {
+  return {
+    require: vi.fn(async (projectId: string) => {
+      if (projectId !== profile.id) throw new Error('unknown project');
+      return profile;
+    }),
+  };
+}
 
 class MemoryReceipts implements ReceiptRepository {
   readonly values = new Map<string, PublishReceipt>();
@@ -28,14 +55,20 @@ class MemoryReceipts implements ReceiptRepository {
     return { receipt, reused: false };
   }
 
-  async listByCampaign(campaignId: string) {
-    return [...this.values.values()].filter((receipt) => receipt.campaignId === campaignId);
+  async listByCampaign(projectId: string, campaignId: string) {
+    return [...this.values.values()].filter(
+      (receipt) => receiptProjectId(receipt) === projectId && receipt.campaignId === campaignId,
+    );
   }
 
-  async findKnownPostRef(postRef: { channel: string; postId: string; publicUrl: string }) {
+  async findKnownPostRef(
+    projectId: string,
+    postRef: { channel: string; postId: string; publicUrl: string },
+  ) {
     return (
       [...this.values.values()].find(
         (receipt) =>
+          receiptProjectId(receipt) === projectId &&
           receipt.channel === postRef.channel &&
           receipt.postId === postRef.postId &&
           receipt.publicUrl === postRef.publicUrl,
@@ -44,16 +77,17 @@ class MemoryReceipts implements ReceiptRepository {
   }
 
   async findByPostRef(
+    projectId: string,
     campaignId: string,
     postRef: { channel: string; postId: string; publicUrl: string },
   ) {
-    const receipt = await this.findKnownPostRef(postRef);
+    const receipt = await this.findKnownPostRef(projectId, postRef);
     return receipt?.campaignId === campaignId ? receipt : null;
   }
 
-  async markDeleted(key: string) {
+  async markDeleted(projectId: string, key: string) {
     const receipt = this.values.get(key);
-    if (!receipt) throw new Error('not found');
+    if (!receipt || receiptProjectId(receipt) !== projectId) throw new Error('not found');
     const deleted = { ...receipt, status: 'deleted' as const };
     this.values.set(key, deleted);
     return deleted;
@@ -79,7 +113,8 @@ function adapter() {
     publish: vi.fn<ChannelAdapter['publish']>(async (input) => ({
       reused: false,
       receipt: {
-        schemaVersion: 1 as const,
+        schemaVersion: 2 as const,
+        projectId: input.projectId,
         campaignId: input.campaignId,
         channel: 'github' as const,
         postId: '123',
@@ -115,7 +150,8 @@ function blueskyAdapter() {
     publish: vi.fn<ChannelAdapter['publish']>(async (input) => ({
       reused: false,
       receipt: {
-        schemaVersion: 1 as const,
+        schemaVersion: 2 as const,
+        projectId: input.projectId,
         campaignId: input.campaignId,
         channel: 'bluesky' as const,
         postId: 'at://did:plc:abcdefghijklmnopqrstuvwx/app.bsky.feed.post/3ltx4abcde22a',
@@ -151,7 +187,8 @@ function mastodonAdapter() {
     publish: vi.fn<ChannelAdapter['publish']>(async (input) => ({
       reused: false,
       receipt: {
-        schemaVersion: 1 as const,
+        schemaVersion: 2 as const,
+        projectId: input.projectId,
         campaignId: input.campaignId,
         channel: 'mastodon' as const,
         postId: '201',
@@ -183,7 +220,8 @@ describe('local runtime lazy GitHub wiring', () => {
       createEnabledClient: vi.fn(async () => null),
     };
     const handler = createLocalRuntimeToolHandler({
-      github,
+      projects: projects(),
+      github: () => github,
       weibo: {
         getStatus: vi.fn(async () => ({
           channel: 'weibo' as const,
@@ -217,12 +255,12 @@ describe('local runtime lazy GitHub wiring', () => {
       receipts: new MemoryReceipts(),
     });
 
-    const status = await handler('channels_status', {});
+    const status = await handler('channels_status', { projectId: PROJECT_ID });
     const data = status.data as {
       contractVersion: number;
       channels: Array<Record<string, unknown>>;
     };
-    expect(data.contractVersion).toBe(2);
+    expect(data.contractVersion).toBe(3);
     expect(data.channels).toHaveLength(5);
     expect(data.channels.find((channel) => channel.channel === 'github')).toMatchObject({
       alias: 'IllegalCreed',
@@ -279,7 +317,8 @@ describe('local runtime lazy GitHub wiring', () => {
       })),
     };
     const handler = createLocalRuntimeToolHandler({
-      github,
+      projects: projects(),
+      github: () => github,
       bluesky,
       receipts: new MemoryReceipts(),
     });
@@ -316,11 +355,12 @@ describe('local runtime lazy GitHub wiring', () => {
       })),
     };
     const handler = createLocalRuntimeToolHandler({
-      github: {
+      projects: projects(),
+      github: () => ({
         getStatus: vi.fn(),
         createRegistration: vi.fn(async () => null),
         createEnabledClient: vi.fn(async () => null),
-      },
+      }),
       bluesky,
       receipts,
     });
@@ -329,6 +369,7 @@ describe('local runtime lazy GitHub wiring', () => {
 
     await expect(
       handler('delete_post', {
+        projectId: PROJECT_ID,
         campaignId: receipt.campaignId,
         postRef: {
           channel: receipt.channel,
@@ -343,7 +384,7 @@ describe('local runtime lazy GitHub wiring', () => {
       }),
     ).resolves.toMatchObject({ data: { status: 'deleted' } });
     expect(adapter.delete).toHaveBeenCalledWith(receipt);
-    expect((await receipts.listByCampaign(receipt.campaignId))[0]).toMatchObject({
+    expect((await receipts.listByCampaign(PROJECT_ID, receipt.campaignId))[0]).toMatchObject({
       status: 'deleted',
     });
     expect(bluesky.createRegistration).toHaveBeenCalledTimes(2);
@@ -370,36 +411,236 @@ describe('local runtime lazy GitHub wiring', () => {
         health: 'ready',
       })),
       createEnabledClient: vi.fn(async () => ({
-        getStatus: vi.fn(),
-        listNotifications: vi.fn(),
+        getStatus: vi.fn(async () => ({
+          id: '201',
+          uri: 'https://mastodon.social/users/illegalcreed/statuses/201',
+          text: 'Quick Sort visualization is live',
+          publicUrl: 'https://mastodon.social/@illegalcreed/201',
+          publishedAt: '2026-07-16T01:00:00.000Z',
+          replyCount: 0,
+          reblogCount: 0,
+          favouriteCount: 0,
+        })),
+        listNotifications: vi.fn(async () => []),
       })),
     };
+    const receipts = new MemoryReceipts();
     const handler = createLocalRuntimeToolHandler({
-      github,
+      projects: projects(),
+      github: () => github,
       mastodon,
-      receipts: new MemoryReceipts(),
+      receipts,
     });
 
-    await expect(
-      handler('publish_campaign', createMastodonPublishRequest()),
-    ).resolves.toMatchObject({
+    const published = await handler('publish_campaign', createMastodonPublishRequest());
+    expect(published).toMatchObject({
       data: {
         receipts: [{ channel: 'mastodon', postId: '201' }],
         failures: [],
       },
     });
+    const publishedReceipt = (published.data as { receipts: PublishReceipt[] }).receipts[0]!;
+    const postRef = {
+      channel: publishedReceipt.channel,
+      postId: publishedReceipt.postId,
+      publicUrl: publishedReceipt.publicUrl,
+    };
     expect(mastodon.createRegistration).toHaveBeenCalledOnce();
     expect(github.createRegistration).not.toHaveBeenCalled();
     expect(adapter.publish).toHaveBeenCalledOnce();
+
+    const withoutMastodon = createLocalRuntimeToolHandler({
+      projects: projects(),
+      github: () => github,
+      receipts,
+    });
+    await expect(
+      withoutMastodon('list_feedback', { projectId: PROJECT_ID, postRef }),
+    ).resolves.toMatchObject({ isError: true, data: { code: 'ADAPTER_UNAVAILABLE' } });
+    await expect(
+      withoutMastodon('get_campaign_report', {
+        projectId: PROJECT_ID,
+        campaignId: publishedReceipt.campaignId,
+        window: '1h',
+      }),
+    ).resolves.toMatchObject({ isError: true, data: { code: 'ADAPTER_UNAVAILABLE' } });
+    await expect(
+      withoutMastodon('delete_post', {
+        projectId: PROJECT_ID,
+        campaignId: publishedReceipt.campaignId,
+        postRef,
+        idempotencyKey: 'delete/quick-sort-launch/mastodon-missing',
+        authorization: {
+          source: 'owner-prompt',
+          authorizedAt: '2026-07-16T02:00:00.000Z',
+        },
+      }),
+    ).resolves.toMatchObject({ isError: true, data: { code: 'ADAPTER_UNAVAILABLE' } });
+
+    const unavailableMastodon = {
+      ...mastodon,
+      createEnabledClient: vi.fn(async () => null),
+    };
+    const unavailableHandler = createLocalRuntimeToolHandler({
+      projects: projects(),
+      github: () => github,
+      mastodon: unavailableMastodon,
+      receipts,
+    });
+    await expect(
+      unavailableHandler('list_feedback', { projectId: PROJECT_ID, postRef }),
+    ).resolves.toMatchObject({ isError: true, data: { code: 'ADAPTER_UNAVAILABLE' } });
+
+    await expect(
+      handler('list_feedback', { projectId: PROJECT_ID, postRef }),
+    ).resolves.toMatchObject({ data: { items: [], nextCursor: null } });
+    await expect(
+      handler('get_campaign_report', {
+        projectId: PROJECT_ID,
+        campaignId: publishedReceipt.campaignId,
+        window: '1h',
+      }),
+    ).resolves.toMatchObject({
+      data: {
+        status: 'available',
+        channels: [expect.objectContaining({ channel: 'mastodon' })],
+      },
+    });
+    await expect(
+      handler('delete_post', {
+        projectId: PROJECT_ID,
+        campaignId: publishedReceipt.campaignId,
+        postRef,
+        idempotencyKey: 'delete/quick-sort-launch/mastodon-0001',
+        authorization: {
+          source: 'owner-prompt',
+          authorizedAt: '2026-07-16T02:00:00.000Z',
+        },
+      }),
+    ).resolves.toMatchObject({ data: { status: 'deleted' } });
+    expect(adapter.delete).toHaveBeenCalledWith(publishedReceipt);
+  });
+
+  it('TC-AUTO-ISOLATION-133-02 缺失项目策略与跨项目 operation 在 adapter 前失败关闭', async () => {
+    const github = {
+      getStatus: vi.fn(),
+      createRegistration: vi.fn(async () => null),
+      createEnabledClient: vi.fn(async () => ({}) as never),
+    };
+    const malformedDevProfile: ProjectProfile = {
+      schemaVersion: 1,
+      id: PROJECT_ID,
+      displayName: 'Malformed DEV profile',
+      canonicalOrigins: ['https://algo.illegalscreed.cn'],
+      channels: ['dev'],
+    };
+    const dev = {
+      getStatus: vi.fn(),
+      createRegistration: vi.fn(async () => null),
+      createEnabledClient: vi.fn(async () => null),
+    };
+    const malformedDev = createLocalRuntimeToolHandler({
+      projects: projects(malformedDevProfile),
+      github: () => github,
+      dev,
+      receipts: new MemoryReceipts(),
+    });
+    await expect(
+      malformedDev('publish_campaign', createDevPublishRequest()),
+    ).resolves.toMatchObject({ isError: true, data: { code: 'INVALID_INPUT' } });
+    expect(dev.createRegistration).not.toHaveBeenCalled();
+
+    const noGitHubProfile: ProjectProfile = {
+      schemaVersion: 1,
+      id: PROJECT_ID,
+      displayName: 'No GitHub profile',
+      canonicalOrigins: ['https://algo.illegalscreed.cn'],
+      channels: ['bluesky'],
+    };
+    const githubFactory = vi.fn(() => github);
+    const noGitHub = createLocalRuntimeToolHandler({
+      projects: projects(noGitHubProfile),
+      github: githubFactory,
+      bluesky: {
+        getStatus: vi.fn(async () => ({
+          channel: 'bluesky' as const,
+          alias: 'owner.bsky.social',
+          health: 'ready' as const,
+          adapterReady: true,
+          nextAction: null,
+        })),
+        createRegistration: vi.fn(async () => null),
+      },
+      receipts: new MemoryReceipts(),
+    });
+    await expect(noGitHub('channels_status', { projectId: PROJECT_ID })).resolves.toMatchObject({
+      data: {
+        channels: expect.arrayContaining([
+          expect.objectContaining({ channel: 'github', adapterReady: false }),
+        ]),
+      },
+    });
+    expect(githubFactory).not.toHaveBeenCalled();
+
+    const malformedGitHubProfile: ProjectProfile = {
+      ...noGitHubProfile,
+      displayName: 'Malformed GitHub profile',
+      channels: ['github'],
+    };
+    const knownReceipts = new MemoryReceipts();
+    const knownReceipt: PublishReceipt = {
+      schemaVersion: 2,
+      projectId: PROJECT_ID,
+      campaignId: 'quick-sort-launch',
+      channel: 'github',
+      postId: '123',
+      publicUrl: 'https://github.com/IllegalCreed/algorithms-visualization/releases/tag/example',
+      publishedAt: '2026-07-11T00:00:00.000Z',
+      contentHash: 'a'.repeat(64),
+      idempotencyKey: 'campaign-v3/algorithm-visualizer/quick-sort-launch/github/example',
+      adapterVersion: 'github-test@1.0.0',
+      status: 'published',
+    };
+    knownReceipts.values.set(knownReceipt.idempotencyKey, knownReceipt);
+    const malformedGitHub = createLocalRuntimeToolHandler({
+      projects: projects(malformedGitHubProfile),
+      github: () => github,
+      receipts: knownReceipts,
+    });
+    const postRef = {
+      channel: knownReceipt.channel,
+      postId: knownReceipt.postId,
+      publicUrl: knownReceipt.publicUrl,
+    };
+    await expect(
+      malformedGitHub('list_feedback', { projectId: PROJECT_ID, postRef }),
+    ).resolves.toMatchObject({ isError: true, data: { code: 'INVALID_INPUT' } });
+
+    await expect(
+      malformedGitHub('reply_feedback', {
+        projectId: PROJECT_ID,
+        campaignId: 'missing-campaign',
+        postRef,
+        commentId: 'comment-1',
+        body: 'Thanks.',
+        policy: 'faq-only',
+        idempotencyKey: 'reply/missing-campaign/example',
+        authorization: {
+          source: 'owner-prompt',
+          authorizedAt: '2026-07-11T00:00:00.000Z',
+        },
+      }),
+    ).resolves.toMatchObject({ isError: true, data: { code: 'INVALID_INPUT' } });
   });
 
   it('TC-AUTO-RUNTIME-127-01 status 异常与默认工厂保持惰性失败关闭', async () => {
     const handler = createLocalRuntimeToolHandler({
-      github: {
+      projects: projects(),
+      github: () => ({
         getStatus: vi.fn().mockRejectedValue(new Error('Bearer private-token')),
         createRegistration: vi.fn(async () => null),
         createEnabledClient: vi.fn(async () => null),
-      },
+      }),
       weibo: {
         getStatus: vi.fn().mockRejectedValue(new Error('cookie private-cookie')),
       },
@@ -414,7 +655,7 @@ describe('local runtime lazy GitHub wiring', () => {
       },
       receipts: new MemoryReceipts(),
     });
-    const status = await handler('channels_status', {});
+    const status = await handler('channels_status', { projectId: PROJECT_ID });
     const channels = (status.data as { channels: Array<Record<string, unknown>> }).channels;
     expect(channels.find((channel) => channel.channel === 'github')).toMatchObject({
       health: 'blocked',
@@ -440,20 +681,23 @@ describe('local runtime lazy GitHub wiring', () => {
     expect(JSON.stringify(status)).not.toContain('private-secret');
 
     const withoutWeibo = createLocalRuntimeToolHandler({
-      github: {
+      projects: projects(),
+      github: () => ({
         getStatus: vi.fn().mockRejectedValue(new Error('offline')),
         createRegistration: vi.fn(async () => null),
         createEnabledClient: vi.fn(async () => null),
-      },
+      }),
       receipts: new MemoryReceipts(),
     });
-    await expect(withoutWeibo('channels_status', {})).resolves.toMatchObject({
-      data: {
-        channels: expect.arrayContaining([
-          expect.objectContaining({ channel: 'weibo', health: 'not-configured' }),
-        ]),
+    await expect(withoutWeibo('channels_status', { projectId: PROJECT_ID })).resolves.toMatchObject(
+      {
+        data: {
+          channels: expect.arrayContaining([
+            expect.objectContaining({ channel: 'weibo', health: 'not-configured' }),
+          ]),
+        },
       },
-    });
+    );
 
     expect(marketingOpsDataRoot()).toContain('Application Support/marketing-ops');
     expect(
@@ -471,8 +715,46 @@ describe('local runtime lazy GitHub wiring', () => {
         accessToken: 'mastodon-access-token-abcdefghijklmnop',
       }),
     ).toMatchObject({ checkHealth: expect.any(Function) });
-    expect(createDefaultLocalRuntimeToolHandler('/tmp/marketing-ops-lazy-test')).toBeTypeOf(
-      'function',
-    );
+    expect(createDefaultGitHubController(PROJECT_PROFILE)).toBeTypeOf('object');
+    expect(() =>
+      createDefaultGitHubController({
+        schemaVersion: 1,
+        id: PROJECT_ID,
+        displayName: 'No GitHub profile',
+        canonicalOrigins: ['https://algo.illegalscreed.cn'],
+        channels: ['bluesky'],
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'INVALID_INPUT' }));
+
+    const root = await mkdtemp(join(tmpdir(), 'marketing-ops-default-runtime-'));
+    const emptyPath = join(root, 'empty-path');
+    await mkdir(emptyPath);
+    await new ProjectProfileStore(root).save({
+      ...PROJECT_PROFILE,
+      channels: ['github'],
+      dev: undefined,
+    });
+    const previousPath = process.env.PATH;
+    process.env.PATH = emptyPath;
+    try {
+      vi.resetModules();
+      const { createDefaultLocalRuntimeToolHandler } = await import('./local-runtime.js');
+      const defaultHandler = createDefaultLocalRuntimeToolHandler(root);
+      await expect(
+        defaultHandler('channels_status', { projectId: PROJECT_ID }),
+      ).resolves.toMatchObject({
+        data: {
+          projectId: PROJECT_ID,
+          channels: expect.arrayContaining([
+            expect.objectContaining({ channel: 'github', adapterReady: false }),
+          ]),
+        },
+      });
+    } finally {
+      vi.resetModules();
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

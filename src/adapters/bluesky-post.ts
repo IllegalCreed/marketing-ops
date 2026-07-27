@@ -64,7 +64,7 @@ const recordSchema = z
   .strict();
 const deleteReceiptSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.union([z.literal(1), z.literal(2)]),
     channel: z.literal('bluesky'),
     postId: z.string().regex(atUriPattern),
     publicUrl: z.url(),
