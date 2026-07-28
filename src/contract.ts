@@ -21,8 +21,26 @@ export const CHANNEL_IDS = [
   'dev',
   'mastodon',
   'x',
+  'jianshu',
+  'facebook',
+  'youtube',
+  'douyin',
 ] as const;
 export type ChannelId = (typeof CHANNEL_IDS)[number];
+export const ASSISTED_CHANNEL_IDS = [
+  'juejin',
+  'v2ex',
+  'bilibili',
+  'zhihu',
+  'hacker-news',
+  'product-hunt',
+  'weibo',
+  'x',
+  'jianshu',
+  'facebook',
+  'youtube',
+  'douyin',
+] as const satisfies readonly ChannelId[];
 const CAMPAIGN_ID_PATTERN = '^[a-z0-9][a-z0-9._-]{0,63}$';
 export const PROJECT_ID_PATTERN = '^[a-z0-9][a-z0-9-]{0,62}$';
 const IDEMPOTENCY_PATTERN = '^[a-z0-9][a-z0-9._/-]{7,255}$';
@@ -168,6 +186,48 @@ export const RENDERED_PACKAGE_JSON_SCHEMA = {
   },
 };
 
+const assistedConfirmationJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['channel', 'publicUrl'],
+  properties: {
+    channel: { enum: [...ASSISTED_CHANNEL_IDS] },
+    publicUrl: { type: 'string', format: 'uri', pattern: '^https://' },
+  },
+};
+
+const executionJsonSchema = {
+  oneOf: [
+    {
+      type: 'object',
+      additionalProperties: false,
+      required: ['mode'],
+      properties: { mode: { const: 'automatic' } },
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      required: ['mode'],
+      properties: { mode: { const: 'assisted-prepare' } },
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      required: ['mode', 'confirmations'],
+      properties: {
+        mode: { const: 'assisted-confirm' },
+        confirmations: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 20,
+          items: assistedConfirmationJsonSchema,
+        },
+      },
+    },
+  ],
+  default: { mode: 'automatic' },
+};
+
 const readAnnotations = {
   readOnlyHint: true,
   destructiveHint: false,
@@ -209,11 +269,12 @@ export const TOOL_DEFINITIONS = [
         packages: {
           type: 'array',
           minItems: 1,
-          maxItems: 5,
+          maxItems: 20,
           items: RENDERED_PACKAGE_JSON_SCHEMA,
         },
         idempotencyKey: { type: 'string', pattern: IDEMPOTENCY_PATTERN },
         authorization: authorizationJsonSchema,
+        execution: executionJsonSchema,
       },
     },
     annotations: writeAnnotations,
@@ -373,6 +434,30 @@ export const RENDERED_PACKAGE_SCHEMA = z
   })
   .strict();
 
+const assistedChannel = z.enum(ASSISTED_CHANNEL_IDS);
+const execution = z
+  .discriminatedUnion('mode', [
+    z.object({ mode: z.literal('automatic') }).strict(),
+    z.object({ mode: z.literal('assisted-prepare') }).strict(),
+    z
+      .object({
+        mode: z.literal('assisted-confirm'),
+        confirmations: z
+          .array(
+            z
+              .object({
+                channel: assistedChannel,
+                publicUrl: z.url().startsWith('https://'),
+              })
+              .strict(),
+          )
+          .min(1)
+          .max(20),
+      })
+      .strict(),
+  ])
+  .default({ mode: 'automatic' });
+
 const EXPECTED_FORMATS: Partial<
   Record<ChannelId, 'release' | 'post' | 'article' | 'status' | 'manual-package'>
 > = {
@@ -387,6 +472,21 @@ const EXPECTED_FORMATS: Partial<
   mastodon: 'status',
 };
 
+const ASSISTED_FORMATS: Partial<Record<ChannelId, 'post' | 'manual-package'>> = {
+  juejin: 'manual-package',
+  v2ex: 'manual-package',
+  bilibili: 'manual-package',
+  zhihu: 'manual-package',
+  'hacker-news': 'manual-package',
+  'product-hunt': 'manual-package',
+  weibo: 'post',
+  x: 'manual-package',
+  jianshu: 'manual-package',
+  facebook: 'manual-package',
+  youtube: 'manual-package',
+  douyin: 'manual-package',
+};
+
 export const TOOL_INPUT_SCHEMAS = {
   channels_status: z.object({ projectId }).strict(),
   publish_campaign: z
@@ -394,9 +494,10 @@ export const TOOL_INPUT_SCHEMAS = {
       projectId,
       campaignId,
       spec: campaignSpec,
-      packages: z.array(RENDERED_PACKAGE_SCHEMA).min(1).max(5),
+      packages: z.array(RENDERED_PACKAGE_SCHEMA).min(1).max(20),
       idempotencyKey,
       authorization,
+      execution,
     })
     .strict()
     .superRefine((value, context) => {
@@ -423,12 +524,28 @@ export const TOOL_INPUT_SCHEMAS = {
             message: 'Package channel must be requested by spec',
           });
         }
-        const expectedFormat = EXPECTED_FORMATS[item.channel];
+        const expectedFormat =
+          value.execution.mode === 'automatic'
+            ? EXPECTED_FORMATS[item.channel]
+            : ASSISTED_FORMATS[item.channel];
         if (!expectedFormat || item.format !== expectedFormat) {
           context.addIssue({
             code: 'custom',
             path: ['packages', index, 'format'],
-            message: 'Package format must match its channel renderer',
+            message:
+              value.execution.mode === 'automatic'
+                ? 'Package format is not supported in automatic mode'
+                : 'Assisted package format must match its channel renderer',
+          });
+        }
+        if (
+          value.execution.mode !== 'automatic' &&
+          item.variants.some((variantValue) => variantValue.media.length > 0)
+        ) {
+          context.addIssue({
+            code: 'custom',
+            path: ['packages', index, 'variants'],
+            message: 'Assisted publication requires resolved media assets',
           });
         }
         const locales = new Set<string>();
@@ -448,6 +565,29 @@ export const TOOL_INPUT_SCHEMAS = {
               message: 'Package locale must be requested by spec',
             });
           }
+        }
+      }
+      if (value.execution.mode === 'assisted-confirm') {
+        const confirmationChannels = new Set<string>();
+        for (const [index, confirmation] of value.execution.confirmations.entries()) {
+          if (confirmationChannels.has(confirmation.channel)) {
+            context.addIssue({
+              code: 'custom',
+              path: ['execution', 'confirmations', index, 'channel'],
+              message: 'Confirmation channels must be unique',
+            });
+          }
+          confirmationChannels.add(confirmation.channel);
+        }
+        if (
+          confirmationChannels.size !== channels.size ||
+          [...channels].some((channel) => !confirmationChannels.has(channel))
+        ) {
+          context.addIssue({
+            code: 'custom',
+            path: ['execution', 'confirmations'],
+            message: 'Confirmation set must match package channels',
+          });
         }
       }
       if (value.spec.failureMode === 'all-or-none') {

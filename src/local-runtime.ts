@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GitHubActivationStore } from './activation-store.js';
+import { AssistedPublicationService } from './assisted-publication.js';
 import { BlueskyActivationStore } from './bluesky-activation-store.js';
 import { DevActivationStore } from './dev-activation-store.js';
 import { BlueskyChannelController, type PublicBlueskyChannelStatus } from './bluesky-channel.js';
@@ -152,6 +153,21 @@ export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): Mar
         campaignId: request.campaignId,
         replies: request.spec.replies,
       });
+      if (request.execution.mode !== 'automatic') {
+        const result = await new AssistedPublicationService({
+          receipts: options.receipts,
+          ...(options.now ? { now: options.now } : {}),
+        }).execute(request);
+        const receipts = await options.receipts.listByCampaign(project.id, request.campaignId);
+        return {
+          ...result,
+          followUps: buildFollowUpSchedule({
+            projectId: project.id,
+            campaignId: request.campaignId,
+            receipts,
+          }),
+        };
+      }
       const channels = new Set(request.packages.map((packageValue) => packageValue.channel));
       const registrations = [];
       if (channels.has('github')) {

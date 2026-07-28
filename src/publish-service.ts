@@ -51,11 +51,11 @@ interface PreparedPublication {
   input: AdapterPublishInput;
 }
 
-function packageHash(value: PublishCampaignInput['packages'][number]): string {
+export function packageHash(value: PublishCampaignInput['packages'][number]): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
-function channelIdempotencyKey(request: PublishCampaignInput, channel: ChannelId): string {
+export function channelIdempotencyKey(request: PublishCampaignInput, channel: ChannelId): string {
   const digest = createHash('sha256').update(request.idempotencyKey).digest('hex').slice(0, 32);
   return `campaign-v3/${request.projectId}/${request.campaignId}/${channel}/${digest}`;
 }

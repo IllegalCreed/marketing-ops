@@ -17,6 +17,7 @@ const PRIMARY_ADAPTER_PREFIXES = [
   'dev-article@',
   'mastodon-status@',
   'weibo-text@',
+  'assisted-owner-confirmed@',
 ] as const;
 
 export interface CampaignFollowUpTask {

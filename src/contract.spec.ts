@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ASSISTED_CHANNEL_IDS,
   assertSafeToolInput,
   CONTRACT_VERSION,
   markUntrustedFeedback,
@@ -162,6 +163,85 @@ describe('marketing-ops MCP contract', () => {
         packages: undefined,
       }),
     ).toThrow();
+  });
+
+  it('TC-AUTO-ASSISTED-127-01..02 19 渠道与三种执行模式保持闭合', () => {
+    expect(ASSISTED_CHANNEL_IDS).toEqual([
+      'juejin',
+      'v2ex',
+      'bilibili',
+      'zhihu',
+      'hacker-news',
+      'product-hunt',
+      'weibo',
+      'x',
+      'jianshu',
+      'facebook',
+      'youtube',
+      'douyin',
+    ]);
+    const publish = TOOL_DEFINITIONS.find((tool) => tool.name === 'publish_campaign');
+    expect(publish?.inputSchema.properties.packages).toMatchObject({ maxItems: 20 });
+    const executionSchema = publish?.inputSchema.properties.execution;
+    expect(executionSchema).toMatchObject({ default: { mode: 'automatic' } });
+    expect(executionSchema?.oneOf).toEqual([
+      expect.objectContaining({ properties: { mode: { const: 'automatic' } } }),
+      expect.objectContaining({ properties: { mode: { const: 'assisted-prepare' } } }),
+      expect.objectContaining({
+        required: ['mode', 'confirmations'],
+        properties: expect.objectContaining({ mode: { const: 'assisted-confirm' } }),
+      }),
+    ]);
+
+    const automatic = TOOL_INPUT_SCHEMAS.publish_campaign.parse(createPublishRequest());
+    expect(automatic.execution).toEqual({ mode: 'automatic' });
+  });
+
+  it('TC-AUTO-ASSISTED-127-04 assisted 只接受 manual package、空媒体与完整确认集合', () => {
+    const request = createPublishRequest();
+    const firstPackage = request.packages[0]!;
+    const manualPackage = {
+      ...firstPackage,
+      channel: 'zhihu' as const,
+      format: 'manual-package' as const,
+      variants: firstPackage.variants.map((variant) => ({ ...variant, media: [] })),
+    };
+    const base = {
+      ...request,
+      spec: { ...request.spec, channels: ['zhihu'] as const },
+      packages: [manualPackage],
+      execution: { mode: 'assisted-prepare' as const },
+    };
+    expect(() => TOOL_INPUT_SCHEMAS.publish_campaign.parse(base)).not.toThrow();
+    expect(() =>
+      TOOL_INPUT_SCHEMAS.publish_campaign.parse({
+        ...base,
+        packages: [
+          {
+            ...manualPackage,
+            variants: manualPackage.variants.map((variant) => ({
+              ...variant,
+              media: ['video'],
+            })),
+          },
+        ],
+      }),
+    ).toThrow(/resolved media/i);
+    expect(() =>
+      TOOL_INPUT_SCHEMAS.publish_campaign.parse({
+        ...base,
+        execution: {
+          mode: 'assisted-confirm',
+          confirmations: [{ channel: 'x', publicUrl: 'https://x.com/illegalcreed/status/123' }],
+        },
+      }),
+    ).toThrow(/confirmation/i);
+    expect(() =>
+      TOOL_INPUT_SCHEMAS.publish_campaign.parse({
+        ...base,
+        execution: { mode: 'automatic' },
+      }),
+    ).toThrow(/automatic/i);
   });
 
   it('TC-AUTO-MCP-127-08 package 必须唯一、匹配 spec 且只含受控字段', () => {

@@ -31,6 +31,12 @@ export default defineConfig({
           functions: 100,
           statements: 95,
         },
+        'src/assisted-publication.ts': {
+          lines: 100,
+          branches: 100,
+          functions: 100,
+          statements: 100,
+        },
         'src/project-profile-store.ts': {
           lines: 100,
           branches: 100,

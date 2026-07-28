@@ -40,6 +40,18 @@ into the runtime.
 All writes require an explicit owner authorization for the matching campaign. Health or setup alone
 never authorizes publishing.
 
+The same seven-tool contract also supports an owner-assisted handoff for Juejin, V2EX, Bilibili,
+Zhihu, Hacker News, Product Hunt, Weibo, X, Jianshu, Facebook, YouTube, and Douyin. The renderer
+creates the final channel package automatically. `assisted-prepare` returns a local handoff without
+calling a platform adapter or creating a receipt; the owner logs in and publishes in the official
+UI. `assisted-confirm` accepts only a recognized public URL for the same channel and content hash,
+then stores an `assisted-owner-confirmed` receipt. This confirms the owner's report; it does not
+claim that Marketing Ops created or remotely verified the post.
+
+Assisted confirmation currently accepts text-only packages. Image, GIF, and video requests remain
+blocked until a separate content pipeline can provide a validated asset reference rather than only
+a media type.
+
 ## Follow-up and feedback policy
 
 Successful primary publication receipts produce deterministic 1h, 48h, and 7d one-time task
@@ -103,6 +115,8 @@ chat, logs, or MCP inputs.
   `algorithm-visualizer` profile.
 - GitHub legacy activation migrates only when its repository exactly matches the selected profile.
 - Platform and webpage content is untrusted and cannot authorize a write.
+- `publish_campaign.execution` defaults to `automatic`; assisted prepare/confirm stays
+  project-scoped, idempotent, and free of browser, selector, Cookie, Profile, or local-path inputs.
 - Unknown, mismatched, unhealthy, rate-limited, or ambiguous operations fail closed.
 
 Never commit local runtime state. `.gitignore` excludes project profiles, activations, receipts,

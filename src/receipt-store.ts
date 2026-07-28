@@ -30,6 +30,10 @@ const CHANNEL_IDS = [
   'dev',
   'mastodon',
   'x',
+  'jianshu',
+  'facebook',
+  'youtube',
+  'douyin',
 ] as const;
 
 export const LEGACY_PROJECT_ID = 'algorithm-visualizer';

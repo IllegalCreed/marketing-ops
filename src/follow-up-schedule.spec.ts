@@ -70,6 +70,19 @@ describe('campaign one-time follow-up schedule', () => {
     ).toEqual([]);
   });
 
+  it('TC-AUTO-ASSISTED-127-08 Owner 确认 receipt 是主发布并生成三窗口计划', () => {
+    const [task] = buildFollowUpSchedule({
+      projectId: 'algorithm-visualizer',
+      campaignId: 'quick-sort-launch',
+      receipts: [receipt('zhihu', '2026-07-28T09:30:00.000Z', 'assisted-owner-confirmed@1.0.0')],
+    });
+
+    expect(task).toMatchObject({
+      anchorAt: '2026-07-28T09:30:00.000Z',
+      dueAt: '2026-07-28T10:30:00.000Z',
+    });
+  });
+
   it('TC-AUTO-SCHEDULE-127-04 到期前 scheduled，到点后 due', () => {
     const [task] = buildFollowUpSchedule({
       projectId: 'algorithm-visualizer',
