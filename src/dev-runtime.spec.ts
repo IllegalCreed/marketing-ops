@@ -315,7 +315,12 @@ describe('local DEV runtime wiring', () => {
         campaignId: receipt.campaignId,
         window: '1h',
       }),
-    ).resolves.toMatchObject({ isError: true, data: { code: 'ADAPTER_UNAVAILABLE' } });
+    ).resolves.toMatchObject({
+      data: {
+        status: 'unavailable',
+        channels: [{ channel: 'dev', status: 'unavailable', reason: 'collector-not-configured' }],
+      },
+    });
   });
 
   it('TC-AUTO-DEVRUNTIME-127-04 状态异常失败关闭且不泄露 API key', async () => {

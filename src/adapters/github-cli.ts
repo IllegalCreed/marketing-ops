@@ -35,6 +35,7 @@ const issueDraftSchema = z
     body: z.string().min(1).max(100_000),
   })
   .strict();
+const issueCommentDraftSchema = z.object({ body: z.string().min(1).max(100_000) }).strict();
 
 const githubCliRequestSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('auth-status') }).strict(),
@@ -125,6 +126,14 @@ const githubCliRequestSchema = z.discriminatedUnion('operation', [
       repository: z.string().regex(REPOSITORY_PATTERN),
       issueNumber: z.number().int().positive().safe(),
       page: PAGE_SCHEMA,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('create-issue-comment'),
+      repository: z.string().regex(REPOSITORY_PATTERN),
+      issueNumber: z.number().int().positive().safe(),
+      comment: issueCommentDraftSchema,
     })
     .strict(),
   z
@@ -336,6 +345,8 @@ const ISSUE_PROJECTION =
   '{number: .number, htmlUrl: .html_url, title: .title, body: (.body // ""), state: .state, createdAt: .created_at, updatedAt: .updated_at}';
 const ISSUE_COMMENTS_PROJECTION =
   '[.[] | {id: .id, htmlUrl: .html_url, body: (.body // ""), userLogin: .user.login, createdAt: .created_at, updatedAt: .updated_at}]';
+const ISSUE_COMMENT_PROJECTION =
+  '{id: .id, htmlUrl: .html_url, body: (.body // ""), userLogin: .user.login, createdAt: .created_at, updatedAt: .updated_at}';
 const TAG_REFERENCE_PROJECTION = '{ref: .ref, sha: .object.sha, type: .object.type}';
 
 function baseArgs(endpoint: string, method: 'GET' | 'POST' | 'DELETE'): string[] {
@@ -464,6 +475,14 @@ export function buildGitHubCliInvocation(value: unknown): GhProcessInvocation {
       `repos/${request.repository}/issues/${request.issueNumber}/comments?per_page=100&page=${request.page}`,
       'GET',
       ISSUE_COMMENTS_PROJECTION,
+    );
+  }
+  if (request.operation === 'create-issue-comment') {
+    return projectedInvocation(
+      `repos/${request.repository}/issues/${request.issueNumber}/comments`,
+      'POST',
+      ISSUE_COMMENT_PROJECTION,
+      JSON.stringify(request.comment),
     );
   }
   if (request.operation === 'get-tag-reference') {
@@ -730,6 +749,25 @@ export class GitHubCliClient implements GitHubReleaseClient {
       issueCommentsSchema,
       requireSuccess(result, 'before-submit'),
       'before-submit',
+    );
+  }
+
+  async createIssueComment(
+    repository: string,
+    issueNumber: number,
+    body: string,
+  ): Promise<GitHubIssueComment> {
+    const request = githubCliRequestSchema.parse({
+      operation: 'create-issue-comment',
+      repository,
+      issueNumber,
+      comment: { body },
+    });
+    const result = await this.#transport.run(request);
+    return parseResponse(
+      issueCommentSchema,
+      requireSuccess(result, 'after-submit'),
+      'after-submit',
     );
   }
 

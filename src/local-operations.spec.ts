@@ -450,7 +450,19 @@ describe('local GitHub status, feedback, report and delete operations', () => {
         campaignId: 'quick-sort-launch',
         window: '7d',
       }),
-    ).resolves.toMatchObject({ isError: true, data: { code: 'TEMPORARY_FAILURE' } });
+    ).resolves.toMatchObject({
+      data: {
+        status: 'unavailable',
+        channels: [
+          {
+            channel: 'github',
+            status: 'failed',
+            code: 'TEMPORARY_FAILURE',
+            retryable: true,
+          },
+        ],
+      },
+    });
 
     const brokenReceipts = new MemoryOperationsReceipts();
     brokenReceipts.listByCampaign = vi.fn(async () => {

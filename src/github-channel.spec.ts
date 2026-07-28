@@ -44,7 +44,10 @@ function client(health: 'ready' | 'not-configured' | 'reauth-required' | 'blocke
     getTrafficClones: vi.fn(),
     getTrafficReferrers: vi.fn(),
     getTrafficPaths: vi.fn(),
+    listIssues: vi.fn(),
+    createIssue: vi.fn(),
     listIssueComments: vi.fn(),
+    createIssueComment: vi.fn(),
   };
 }
 
@@ -107,6 +110,7 @@ describe('GitHub activation and channel controller', () => {
       adapter: { definition: { channel: 'github' } },
     });
     await expect(controller.createEnabledClient()).resolves.toBe(gh);
+    await expect(controller.createEnabledIssueClient()).resolves.toBe(gh);
 
     const unhealthyAfterEnable = new GitHubChannelController({
       client: client('blocked'),
@@ -119,6 +123,7 @@ describe('GitHub activation and channel controller', () => {
     });
     await expect(unhealthyAfterEnable.createRegistration()).resolves.toBeNull();
     await expect(unhealthyAfterEnable.createEnabledClient()).resolves.toBeNull();
+    await expect(unhealthyAfterEnable.createEnabledIssueClient()).resolves.toBeNull();
 
     const blocked = new GitHubChannelController({
       client: client('reauth-required'),

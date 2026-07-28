@@ -144,6 +144,12 @@ describe('GitHub observability and Issue CLI operations', () => {
       repository: REPOSITORY,
       issue: { title: 'Bug report', body: '<!-- private-ish marker -->\nBody' },
     });
+    const reply = buildGitHubCliInvocation({
+      operation: 'create-issue-comment',
+      repository: REPOSITORY,
+      issueNumber: 12,
+      comment: { body: '<!-- reply marker -->\nThanks.' },
+    });
 
     expect(list.args[1]).toBe(
       `repos/${REPOSITORY}/issues?state=all&sort=created&direction=desc&per_page=100&page=2`,
@@ -154,6 +160,12 @@ describe('GitHub observability and Issue CLI operations', () => {
     expect(JSON.parse(create.stdin ?? '{}')).toEqual({
       title: 'Bug report',
       body: '<!-- private-ish marker -->\nBody',
+    });
+    expect(reply.args[1]).toBe(`repos/${REPOSITORY}/issues/12/comments`);
+    expect(reply.args).toContain('--input');
+    expect(reply.args.join(' ')).not.toContain('reply marker');
+    expect(JSON.parse(reply.stdin ?? '{}')).toEqual({
+      body: '<!-- reply marker -->\nThanks.',
     });
     expect(() =>
       buildGitHubCliInvocation({
@@ -215,6 +227,17 @@ describe('GitHub observability and Issue CLI operations', () => {
           },
         ]),
       }),
+      result({
+        stdout: JSON.stringify({
+          id: 22,
+          htmlUrl:
+            'https://github.com/IllegalCreed/algorithms-visualization/issues/12#issuecomment-22',
+          body: '<!-- reply marker -->\nThanks.',
+          userLogin: 'IllegalCreed',
+          createdAt: '2026-07-11T02:00:00Z',
+          updatedAt: '2026-07-11T02:00:00Z',
+        }),
+      }),
     );
     const client = new GitHubCliClient(mock);
 
@@ -225,6 +248,9 @@ describe('GitHub observability and Issue CLI operations', () => {
     await expect(client.listIssueComments(REPOSITORY, 12, 1)).resolves.toMatchObject([
       { id: 21, userLogin: null, body: 'Comment' },
     ]);
+    await expect(
+      client.createIssueComment(REPOSITORY, 12, '<!-- reply marker -->\nThanks.'),
+    ).resolves.toMatchObject({ id: 22, userLogin: 'IllegalCreed' });
 
     const unknown = new GitHubCliClient(
       transport(result({ exitCode: 1, stderr: 'unclassified create failure' })),

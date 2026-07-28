@@ -29,16 +29,30 @@ into the runtime.
 
 ## Supported channels
 
-| Channel       | Publish                   | Feedback/report                               | Delete | Notes                                                    |
-| ------------- | ------------------------- | --------------------------------------------- | ------ | -------------------------------------------------------- |
-| GitHub        | Release                   | Reactions, Issue comments, repository traffic | Yes    | Repository comes from the project profile                |
-| Bluesky       | English text post         | No                                            | Yes    | Uses a dedicated App Password                            |
-| DEV Community | English article           | Comments and reaction counts                  | No     | Canonical origins and tags come from the project profile |
-| Mastodon      | English or Chinese status | Replies, boosts, favourites                   | Yes    | Works with a configured HTTPS instance                   |
-| Weibo         | Disabled                  | Read-only diagnostics                         | No     | The zero-cost personal API tier has no write quota       |
+| Channel       | Publish                   | Feedback/report                               | Delete | Notes                                                             |
+| ------------- | ------------------------- | --------------------------------------------- | ------ | ----------------------------------------------------------------- |
+| GitHub        | Release                   | Reactions, Issue comments, repository traffic | Yes    | FAQ Issue replies and Bug Issue routing are fail-closed and typed |
+| Bluesky       | English text post         | Explicitly unavailable                        | Yes    | Uses a dedicated App Password                                     |
+| DEV Community | English article           | Comments and reaction counts                  | No     | Canonical origins and tags come from the project profile          |
+| Mastodon      | English or Chinese status | Replies, boosts, favourites                   | Yes    | Works with a configured HTTPS instance                            |
+| Weibo         | Disabled                  | Read-only diagnostics                         | No     | The zero-cost personal API tier has no write quota                |
 
 All writes require an explicit owner authorization for the matching campaign. Health or setup alone
 never authorizes publishing.
+
+## Follow-up and feedback policy
+
+Successful primary publication receipts produce deterministic 1h, 48h, and 7d one-time task
+descriptors. `get_campaign_report` does not call collectors before the requested task is due. At
+the due time it returns one standard entry per primary publication; unsupported, reauthentication,
+and platform failures stay explicit instead of becoming zero.
+
+The stored campaign policy is the authority for `faq-only` handling. A reply or Bug Issue requires a
+known published receipt, a fresh reread of the exact untrusted feedback item, a matching
+owner-authorized call, and a stable idempotency key. Only short thanks and clear documentation
+questions may use a fixed reply template, and the first supported transport is a GitHub Issue
+comment. High-confidence Bug feedback may create a GitHub Issue when the campaign opted in; the
+Issue contains a hashed feedback ID and public source URL, never the comment body or author.
 
 ## Install and verify
 

@@ -80,6 +80,37 @@ describe('marketing-ops MCP contract', () => {
     expect(tools.delete_post?.annotations.destructiveHint).toBe(true);
   });
 
+  it('TC-AUTO-FAQ-127-03 reply action 闭合且 caller 正文不是授权来源', () => {
+    const reply = TOOL_DEFINITIONS.find((tool) => tool.name === 'reply_feedback');
+
+    expect(reply?.inputSchema.required).not.toContain('body');
+    expect(reply?.inputSchema.properties).toMatchObject({
+      action: { enum: ['faq-reply', 'bug-issue'], default: 'faq-reply' },
+      body: { type: 'string', minLength: 1, maxLength: 2_000 },
+      policy: { const: 'faq-only' },
+    });
+    expect(() =>
+      TOOL_INPUT_SCHEMAS.reply_feedback.parse({
+        projectId: 'algorithm-visualizer',
+        campaignId: 'quick-sort-launch',
+        postRef: {
+          channel: 'dev',
+          postId: '1',
+          publicUrl: 'https://dev.to/algorithmviz/quick-sort',
+        },
+        commentId: 'dev-comment:1',
+        action: 'bug-issue',
+        body: 'caller-authored content',
+        policy: 'faq-only',
+        idempotencyKey: 'feedback/quick-sort-launch/0001',
+        authorization: {
+          source: 'owner-prompt',
+          authorizedAt: '2026-07-28T01:00:00.000Z',
+        },
+      }),
+    ).toThrow(/does not accept/i);
+  });
+
   it('TC-AUTO-MCP-127-04 敌意嵌套字段在 dispatch 前失败关闭', () => {
     for (const key of [
       'password',

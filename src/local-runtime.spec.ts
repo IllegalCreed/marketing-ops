@@ -172,7 +172,7 @@ function mastodonAdapter() {
   const value: ChannelAdapter = {
     definition: {
       channel: 'mastodon',
-      version: 'mastodon-test@1.0.0',
+      version: 'mastodon-status@0.1.0',
       capabilities: {
         publish: true,
         status: true,
@@ -196,7 +196,7 @@ function mastodonAdapter() {
         publishedAt: '2026-07-16T01:00:00.000Z',
         contentHash: input.contentHash,
         idempotencyKey: input.idempotencyKey,
-        adapterVersion: 'mastodon-test@1.0.0',
+        adapterVersion: 'mastodon-status@0.1.0',
         status: 'published' as const,
       },
     })),
@@ -463,7 +463,18 @@ describe('local runtime lazy GitHub wiring', () => {
         campaignId: publishedReceipt.campaignId,
         window: '1h',
       }),
-    ).resolves.toMatchObject({ isError: true, data: { code: 'ADAPTER_UNAVAILABLE' } });
+    ).resolves.toMatchObject({
+      data: {
+        status: 'unavailable',
+        channels: [
+          {
+            channel: 'mastodon',
+            status: 'unavailable',
+            reason: 'collector-not-configured',
+          },
+        ],
+      },
+    });
     await expect(
       withoutMastodon('delete_post', {
         projectId: PROJECT_ID,

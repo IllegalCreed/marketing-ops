@@ -1,5 +1,7 @@
 import type { GitHubActivationStore } from './activation-store.js';
 import type { GitHubCliClient, GitHubCliHealth } from './adapters/github-cli.js';
+import type { GitHubIssueClient } from './adapters/github-issue.js';
+import type { GitHubIssueReplyClient } from './adapters/github-issue-reply.js';
 import { GitHubReleaseAdapter, type GitHubReleaseClient } from './adapters/github-release.js';
 import { MarketingOpsError } from './errors.js';
 import type { GitHubObservabilityClient } from './github-observability.js';
@@ -15,6 +17,8 @@ export interface PublicGitHubChannelStatus {
 
 type GitHubChannelClient = GitHubReleaseClient &
   GitHubObservabilityClient &
+  GitHubIssueClient &
+  GitHubIssueReplyClient &
   Pick<GitHubCliClient, 'checkHealth'>;
 
 interface GitHubChannelControllerOptions {
@@ -85,6 +89,10 @@ export class GitHubChannelController {
   }
 
   async createEnabledClient(): Promise<GitHubObservabilityClient | null> {
+    return (await this.#isEnabledAndHealthy()) ? this.#client : null;
+  }
+
+  async createEnabledIssueClient(): Promise<(GitHubIssueClient & GitHubIssueReplyClient) | null> {
     return (await this.#isEnabledAndHealthy()) ? this.#client : null;
   }
 

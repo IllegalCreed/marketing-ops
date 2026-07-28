@@ -103,6 +103,18 @@ export default defineConfig({
           functions: 100,
           statements: 100,
         },
+        'src/campaign-policy-store.ts': {
+          lines: 100,
+          branches: 100,
+          functions: 100,
+          statements: 100,
+        },
+        'src/adapters/github-issue-reply.ts': {
+          lines: 100,
+          branches: 100,
+          functions: 100,
+          statements: 100,
+        },
         'src/github-observability.ts': {
           lines: 95,
           branches: 90,

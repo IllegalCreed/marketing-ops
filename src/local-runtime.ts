@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,6 +7,11 @@ import { BlueskyActivationStore } from './bluesky-activation-store.js';
 import { DevActivationStore } from './dev-activation-store.js';
 import { BlueskyChannelController, type PublicBlueskyChannelStatus } from './bluesky-channel.js';
 import { AdapterError } from './adapters/contract.js';
+import { GitHubIssueAdapter, type GitHubIssueClient } from './adapters/github-issue.js';
+import {
+  GitHubIssueReplyAdapter,
+  type GitHubIssueReplyClient,
+} from './adapters/github-issue-reply.js';
 import { BlueskyApiClient, type BlueskyCredentials } from './adapters/bluesky-api.js';
 import { DevApiClient } from './adapters/dev-api.js';
 import { MastodonApiClient, type MastodonCredentials } from './adapters/mastodon-api.js';
@@ -13,6 +19,14 @@ import { GitHubCliClient } from './adapters/github-cli.js';
 import { WeiboCliClient } from './adapters/weibo-cli.js';
 import { DevChannelController, type PublicDevChannelStatus } from './dev-channel.js';
 import { DevCollector, type DevObservabilityClient } from './dev-observability.js';
+import { CampaignPolicyStore } from './campaign-policy-store.js';
+import { buildStandardCampaignReport, type CollectorOutcome } from './campaign-report.js';
+import { buildBugIssue, buildFaqReply, classifyFeedback } from './feedback-policy.js';
+import {
+  buildFollowUpSchedule,
+  isPrimaryPublicationReceipt,
+  reportWindowState,
+} from './follow-up-schedule.js';
 import { GitHubChannelController, type PublicGitHubChannelStatus } from './github-channel.js';
 import { MastodonChannelController, type PublicMastodonChannelStatus } from './mastodon-channel.js';
 import { MastodonCollector, type MastodonObservabilityClient } from './mastodon-observability.js';
@@ -21,7 +35,12 @@ import { assertSafeToolInput, CONTRACT_VERSION, TOOL_INPUT_SCHEMAS } from './con
 import { MarketingOpsError } from './errors.js';
 import { GitHubCollector, type GitHubObservabilityClient } from './github-observability.js';
 import { PublishService, type ReceiptRepository } from './publish-service.js';
-import { ReceiptStore, type PublicPostRef, type PublishReceipt } from './receipt-store.js';
+import {
+  ReceiptStore,
+  receiptProjectId,
+  type PublicPostRef,
+  type PublishReceipt,
+} from './receipt-store.js';
 import { createRuntimeToolHandler } from './runtime-handler.js';
 import { assertProjectPublishRequest } from './project-policy.js';
 import { ProjectProfileStore, type ProjectProfile } from './project-profile-store.js';
@@ -35,6 +54,7 @@ interface GitHubRuntimeController {
   getStatus(): Promise<PublicGitHubChannelStatus>;
   createRegistration(): ReturnType<GitHubChannelController['createRegistration']>;
   createEnabledClient(): Promise<GitHubObservabilityClient | null>;
+  createEnabledIssueClient?(): Promise<(GitHubIssueClient & GitHubIssueReplyClient) | null>;
 }
 
 interface RuntimeReceiptRepository extends ReceiptRepository {
@@ -76,6 +96,8 @@ interface LocalRuntimeOptions {
   dev?: DevRuntimeController;
   mastodon?: MastodonRuntimeController;
   receipts: RuntimeReceiptRepository;
+  campaignPolicies?: Pick<CampaignPolicyStore, 'save' | 'get'>;
+  now?: () => string;
 }
 
 function blockedGitHubStatus(): PublicGitHubChannelStatus {
@@ -124,6 +146,12 @@ export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): Mar
       const request = TOOL_INPUT_SCHEMAS.publish_campaign.parse(input);
       const project = await options.projects.require(request.projectId);
       assertProjectPublishRequest(project, request);
+      await options.campaignPolicies?.save({
+        schemaVersion: 1,
+        projectId: request.projectId,
+        campaignId: request.campaignId,
+        replies: request.spec.replies,
+      });
       const channels = new Set(request.packages.map((packageValue) => packageValue.channel));
       const registrations = [];
       if (channels.has('github')) {
@@ -146,11 +174,20 @@ export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): Mar
       if (channels.has('mastodon') && options.mastodon) {
         registrations.push(await options.mastodon.createRegistration());
       }
-      return new PublishService({
+      const result = await new PublishService({
         profile: project,
         registrations: registrations.filter((registration) => registration !== null),
         receipts: options.receipts,
       }).publish(request);
+      const receipts = await options.receipts.listByCampaign(project.id, request.campaignId);
+      return {
+        ...result,
+        followUps: buildFollowUpSchedule({
+          projectId: project.id,
+          campaignId: request.campaignId,
+          receipts,
+        }),
+      };
     },
   });
 
@@ -243,6 +280,11 @@ export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): Mar
             status,
             receipts,
             failures: [],
+            followUps: buildFollowUpSchedule({
+              projectId: project.id,
+              campaignId: request.campaignId,
+              receipts,
+            }),
           },
         };
       }
@@ -280,50 +322,55 @@ export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): Mar
       if (name === 'get_campaign_report') {
         const request = TOOL_INPUT_SCHEMAS.get_campaign_report.parse(input);
         const project = await options.projects.require(request.projectId);
-        const receipts = (
-          await options.receipts.listByCampaign(project.id, request.campaignId)
-        ).filter(
-          (receipt) =>
-            receipt.status === 'published' &&
-            ((receipt.channel === 'github' && receipt.publicUrl.includes('/releases/')) ||
-              receipt.channel === 'dev' ||
-              receipt.channel === 'mastodon'),
-        );
-        if (receipts.length === 0) {
+        const receipts = await options.receipts.listByCampaign(project.id, request.campaignId);
+        const followUp = buildFollowUpSchedule({
+          projectId: project.id,
+          campaignId: request.campaignId,
+          receipts,
+        }).find((task) => task.window === request.window);
+        if (!followUp) {
           return {
             data: {
               campaignId: request.campaignId,
               projectId: project.id,
               window: request.window,
               status: 'unavailable',
-              reason: 'No published observable receipt was found',
+              reason: 'No successful primary publication receipt was found',
             },
           };
         }
-        const channels = [];
-        for (const receipt of receipts) {
-          if (receipt.channel === 'github') {
-            channels.push(
-              await (await enabledCollector(options.github(project), project)).collect(receipt),
-            );
-          } else if (receipt.channel === 'mastodon') {
-            if (!options.mastodon) return unavailableOperation();
-            channels.push(
-              await (await enabledMastodonCollector(options.mastodon)).collect(receipt),
-            );
-          } else {
-            if (!options.dev) return unavailableOperation();
-            channels.push(await (await enabledDevCollector(options.dev)).collect(receipt));
-          }
+        const generatedAt = (options.now ?? (() => new Date().toISOString()))();
+        if (reportWindowState(followUp, generatedAt) === 'scheduled') {
+          return {
+            data: {
+              schemaVersion: 1,
+              campaignId: request.campaignId,
+              projectId: project.id,
+              window: request.window,
+              status: 'scheduled',
+              anchorAt: followUp.anchorAt,
+              dueAt: followUp.dueAt,
+              generatedAt,
+              channels: [],
+              artifacts: reportArtifacts(receipts),
+              limitations: ['collector-not-called-before-window-is-due'],
+            },
+          };
+        }
+        const outcomes: Record<string, CollectorOutcome> = {};
+        for (const receipt of receipts.filter(isPrimaryPublicationReceipt)) {
+          outcomes[receipt.idempotencyKey] = await collectReceiptOutcome(receipt, project, options);
         }
         return {
-          data: {
-            campaignId: request.campaignId,
+          data: buildStandardCampaignReport({
             projectId: project.id,
+            campaignId: request.campaignId,
             window: request.window,
-            status: 'available',
-            channels,
-          },
+            followUp,
+            generatedAt,
+            receipts,
+            outcomes,
+          }),
         };
       }
       if (name === 'delete_post') {
@@ -388,7 +435,119 @@ export function createLocalRuntimeToolHandler(options: LocalRuntimeOptions): Mar
         if (!receipt) {
           throw new MarketingOpsError('INVALID_INPUT', 'Known post receipt was not found');
         }
-        return unavailableOperation();
+        if (receipt.status !== 'published') {
+          throw new MarketingOpsError('INVALID_INPUT', 'Known post is not published');
+        }
+        const policy = await options.campaignPolicies?.get(project.id, request.campaignId);
+        if (!policy || policy.replies.mode !== 'faq-only') {
+          throw new MarketingOpsError(
+            'ADAPTER_UNAVAILABLE',
+            'Campaign FAQ policy is not available',
+          );
+        }
+        const feedback = await findFeedback(options, project, request.postRef, request.commentId);
+        const decision = classifyFeedback({
+          id: feedback.id,
+          channel: request.postRef.channel,
+          body: feedback.body,
+          sourceUrl: feedback.sourceUrl,
+        });
+        if (request.action === 'bug-issue') {
+          if (!policy.replies.createBugIssues || decision.decision !== 'bug') {
+            throw new MarketingOpsError(
+              'ADAPTER_UNAVAILABLE',
+              'Feedback is not eligible for automatic Bug Issue routing',
+            );
+          }
+          const issueClient = await enabledIssueClient(options.github(project));
+          const operationKey = feedbackOperationKey(request, 'bug-issue');
+          const existing = await knownFeedbackArtifact(
+            options.receipts,
+            project.id,
+            request.campaignId,
+            operationKey,
+            'github-issue@',
+          );
+          if (existing) {
+            return {
+              data: { action: 'bug-issue', receipt: existing, reused: true },
+            };
+          }
+          const result = await new GitHubIssueAdapter({
+            client: issueClient,
+            repository: requireGitHubRepository(project),
+          }).create(
+            buildBugIssue({
+              projectId: project.id,
+              campaignId: request.campaignId,
+              feedback: {
+                id: feedback.id,
+                channel: request.postRef.channel,
+                body: feedback.body,
+                sourceUrl: feedback.sourceUrl,
+              },
+              idempotencyKey: operationKey,
+            }),
+          );
+          const stored = await saveFeedbackArtifact(options.receipts, result.receipt);
+          return {
+            data: {
+              action: 'bug-issue',
+              receipt: stored.receipt,
+              reused: result.reused || stored.reused,
+            },
+          };
+        }
+        if (decision.decision !== 'faq') {
+          throw new MarketingOpsError('ADAPTER_UNAVAILABLE', 'Feedback requires Owner review');
+        }
+        if (
+          request.postRef.channel !== 'github' ||
+          !request.postRef.publicUrl.includes('/issues/')
+        ) {
+          return unavailableOperation();
+        }
+        const body = buildFaqReply(decision, project.canonicalOrigins[0]!);
+        if (request.body !== undefined && request.body !== body) {
+          throw new MarketingOpsError(
+            'INVALID_INPUT',
+            'FAQ reply body does not match the approved template',
+          );
+        }
+        const issueClient = await enabledIssueClient(options.github(project));
+        const operationKey = feedbackOperationKey(request, 'faq-reply');
+        const existing = await knownFeedbackArtifact(
+          options.receipts,
+          project.id,
+          request.campaignId,
+          operationKey,
+          'github-issue-reply@',
+        );
+        if (existing) {
+          return { data: { action: 'faq-reply', body, receipt: existing, reused: true } };
+        }
+        const issueNumber = Number(request.postRef.postId);
+        const result = await new GitHubIssueReplyAdapter({
+          client: issueClient,
+          repository: requireGitHubRepository(project),
+        }).reply({
+          projectId: project.id,
+          campaignId: request.campaignId,
+          issueNumber,
+          issueUrl: request.postRef.publicUrl,
+          sourceCommentId: request.commentId,
+          body,
+          idempotencyKey: operationKey,
+        });
+        const stored = await saveFeedbackArtifact(options.receipts, result.receipt);
+        return {
+          data: {
+            action: 'faq-reply',
+            body,
+            receipt: stored.receipt,
+            reused: result.reused || stored.reused,
+          },
+        };
       }
       return unavailableOperation();
     } catch (error) {
@@ -422,6 +581,172 @@ function operationError(error: unknown) {
     isError: true,
     data: { code: 'ADAPTER_UNAVAILABLE', message: 'Platform operation failed closed' },
   };
+}
+
+function reportArtifacts(receipts: readonly PublishReceipt[]) {
+  return receipts
+    .filter((receipt) => !isPrimaryPublicationReceipt(receipt))
+    .map((receipt) => ({
+      channel: receipt.channel,
+      postId: receipt.postId,
+      publicUrl: receipt.publicUrl,
+      adapterVersion: receipt.adapterVersion,
+      status: receipt.status,
+    }));
+}
+
+async function collectReceiptOutcome(
+  receipt: PublishReceipt,
+  project: ProjectProfile,
+  options: LocalRuntimeOptions,
+): Promise<CollectorOutcome> {
+  if (receipt.status !== 'published') {
+    return { status: 'unavailable', reason: `post-${receipt.status}` };
+  }
+  try {
+    if (receipt.channel === 'github') {
+      const collector = await enabledCollector(options.github(project), project);
+      return { status: 'available', observation: await collector.collect(receipt) };
+    }
+    if (receipt.channel === 'dev') {
+      if (!options.dev) return { status: 'unavailable', reason: 'collector-not-configured' };
+      const collector = await enabledDevCollector(options.dev);
+      return { status: 'available', observation: await collector.collect(receipt) };
+    }
+    if (receipt.channel === 'mastodon') {
+      if (!options.mastodon) {
+        return { status: 'unavailable', reason: 'collector-not-configured' };
+      }
+      const collector = await enabledMastodonCollector(options.mastodon);
+      return { status: 'available', observation: await collector.collect(receipt) };
+    }
+    return { status: 'unavailable', reason: 'collector-not-implemented' };
+  } catch (error) {
+    if (error instanceof AdapterError) {
+      return { status: 'failed', code: error.code, retryable: error.retryable };
+    }
+    if (error instanceof MarketingOpsError) {
+      const code =
+        error.code === 'INVALID_INPUT' || error.code === 'STORAGE_CORRUPTED'
+          ? error.code
+          : error.code === 'REAUTH_REQUIRED'
+            ? 'REAUTH_REQUIRED'
+            : 'ADAPTER_UNAVAILABLE';
+      return { status: 'failed', code, retryable: false };
+    }
+    return { status: 'failed', code: 'ADAPTER_UNAVAILABLE', retryable: false };
+  }
+}
+
+interface RuntimeFeedbackItem {
+  id: string;
+  body: string;
+  sourceUrl: string;
+}
+
+interface FeedbackPage {
+  items: RuntimeFeedbackItem[];
+  nextCursor: string | null;
+}
+
+async function findFeedback(
+  options: LocalRuntimeOptions,
+  project: ProjectProfile,
+  postRef: PublicPostRef,
+  commentId: string,
+): Promise<RuntimeFeedbackItem> {
+  let cursor: string | undefined;
+  for (let page = 1; page <= 10; page += 1) {
+    let result: FeedbackPage;
+    if (postRef.channel === 'github') {
+      result = (await enabledCollector(options.github(project), project).then((collector) =>
+        collector.listFeedback(postRef, cursor),
+      )) as FeedbackPage;
+    } else if (postRef.channel === 'dev' && options.dev) {
+      result = (await enabledDevCollector(options.dev).then((collector) =>
+        collector.listFeedback(postRef, cursor),
+      )) as FeedbackPage;
+    } else if (postRef.channel === 'mastodon' && options.mastodon) {
+      result = (await enabledMastodonCollector(options.mastodon).then((collector) =>
+        collector.listFeedback(postRef),
+      )) as FeedbackPage;
+    } else {
+      throw new MarketingOpsError(
+        'ADAPTER_UNAVAILABLE',
+        'Feedback collector is not enabled and ready',
+      );
+    }
+    const feedback = result.items.find((item) => item.id === commentId);
+    if (feedback) return feedback;
+    if (!result.nextCursor) break;
+    cursor = result.nextCursor;
+  }
+  throw new MarketingOpsError('INVALID_INPUT', 'Known feedback item was not found');
+}
+
+async function enabledIssueClient(
+  github: GitHubRuntimeController,
+): Promise<GitHubIssueClient & GitHubIssueReplyClient> {
+  const client = await github.createEnabledIssueClient?.();
+  if (!client) {
+    throw new MarketingOpsError(
+      'ADAPTER_UNAVAILABLE',
+      'GitHub Issue adapter is not enabled and ready',
+    );
+  }
+  return client;
+}
+
+function feedbackOperationKey(
+  request: {
+    projectId: string;
+    campaignId: string;
+    idempotencyKey: string;
+    commentId: string;
+  },
+  action: 'faq-reply' | 'bug-issue',
+): string {
+  const digest = createHash('sha256')
+    .update(
+      `${request.projectId}\0${request.campaignId}\0${request.idempotencyKey}\0${request.commentId}\0${action}`,
+    )
+    .digest('hex');
+  return `feedback-v1/${request.projectId}/${request.campaignId}/${action}/${digest}`;
+}
+
+async function knownFeedbackArtifact(
+  receipts: RuntimeReceiptRepository,
+  projectId: string,
+  campaignId: string,
+  operationKey: string,
+  adapterPrefix: string,
+): Promise<PublishReceipt | null> {
+  const receipt = await receipts.getByIdempotencyKey(operationKey);
+  if (!receipt) return null;
+  if (
+    receiptProjectId(receipt) !== projectId ||
+    receipt.campaignId !== campaignId ||
+    receipt.idempotencyKey !== operationKey ||
+    receipt.status !== 'published' ||
+    !receipt.adapterVersion.startsWith(adapterPrefix)
+  ) {
+    throw new MarketingOpsError(
+      'STORAGE_CORRUPTED',
+      'Feedback artifact receipt conflicts with this operation',
+    );
+  }
+  return receipt;
+}
+
+async function saveFeedbackArtifact(receipts: RuntimeReceiptRepository, receipt: PublishReceipt) {
+  return receipts.save(receipt);
+}
+
+function requireGitHubRepository(project: ProjectProfile): string {
+  if (!project.github) {
+    throw new MarketingOpsError('INVALID_INPUT', 'GitHub project policy is not configured');
+  }
+  return project.github.repository;
 }
 
 async function enabledCollector(
@@ -533,5 +858,6 @@ export function createDefaultLocalRuntimeToolHandler(
     dev: createDefaultDevController(root),
     mastodon: createDefaultMastodonController(root),
     receipts: new ReceiptStore(root),
+    campaignPolicies: new CampaignPolicyStore(root),
   });
 }

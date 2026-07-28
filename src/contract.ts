@@ -261,7 +261,6 @@ export const TOOL_DEFINITIONS = [
         'campaignId',
         'postRef',
         'commentId',
-        'body',
         'policy',
         'idempotencyKey',
         'authorization',
@@ -271,6 +270,7 @@ export const TOOL_DEFINITIONS = [
         campaignId: { type: 'string', pattern: CAMPAIGN_ID_PATTERN },
         postRef: postRefJsonSchema,
         commentId: { type: 'string', minLength: 1, maxLength: 200 },
+        action: { enum: ['faq-reply', 'bug-issue'], default: 'faq-reply' },
         body: { type: 'string', minLength: 1, maxLength: 2_000 },
         policy: { const: 'faq-only' },
         idempotencyKey: { type: 'string', pattern: IDEMPOTENCY_PATTERN },
@@ -479,12 +479,22 @@ export const TOOL_INPUT_SCHEMAS = {
       campaignId,
       postRef,
       commentId: z.string().min(1).max(200),
-      body: z.string().min(1).max(2_000),
+      action: z.enum(['faq-reply', 'bug-issue']).default('faq-reply'),
+      body: z.string().min(1).max(2_000).optional(),
       policy: z.literal('faq-only'),
       idempotencyKey,
       authorization,
     })
-    .strict(),
+    .strict()
+    .superRefine((value, context) => {
+      if (value.action === 'bug-issue' && value.body !== undefined) {
+        context.addIssue({
+          code: 'custom',
+          path: ['body'],
+          message: 'bug-issue does not accept caller-authored body text',
+        });
+      }
+    }),
   delete_post: z.object({ projectId, campaignId, postRef, idempotencyKey, authorization }).strict(),
   get_campaign_report: z
     .object({ projectId, campaignId, window: z.enum(['1h', '48h', '7d']) })
